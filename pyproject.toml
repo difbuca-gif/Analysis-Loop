@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "analysis-loop-v3"
+version = "0.1.0"
+description = "LangGraph 중심 자율 분석 루프 — 그래프 상태가 유일한 SSOT"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=1.0",
+    "langgraph-checkpoint-sqlite>=3.0",
+    "pydantic>=2.7",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "scikit-learn>=1.4",
+    "statsmodels>=0.14",
+    "pyarrow>=15",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "aiosqlite>=0.20",
+    # 생성된 분석 코드의 시각화 출력을 위해 명시한다.
+    "matplotlib>=3.8",
+    "tqdm",
+    # sandbox에서 허용하는 추가 분석 라이브러리.
+    "xgboost",
+    "lightgbm",
+    "linearmodels",
+    "mlxtend",
+    "ruptures",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.5"]
+postgres = [
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+]
+# FastAPI 서버(src/analysis_loop_v3/api/). CLI는 이 그룹 없이도 동작한다.
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    # Worker의 multipart 요청 처리에 사용한다.
+    "python-multipart>=0.0.9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+analysis_loop_v3 = ["llm/prompts/*.md", "llm/wiki/*.md"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+# LLM 경계의 공급자/파서 오류를 상태로 변환한다.
+"src/analysis_loop_v3/llm/client.py" = ["BLE001", "S110"]
+"src/analysis_loop_v3/llm/services.py" = ["BLE001"]
+# subprocess에 전달한 임시 파일을 명시적으로 정리한다.
+"src/analysis_loop_v3/llm/agy_codegen.py" = ["SIM115", "UP041"]
+# FastAPI 의존성 선언과 공개 심볼 순서를 보존한다.
+"src/analysis_loop_v3/worker/app.py" = ["B008"]
+"src/analysis_loop_v3/orchestration/nodes/__init__.py" = ["RUF022"]

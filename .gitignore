@@ -1,0 +1,33 @@
+# 비밀값 — 절대 커밋 금지
+.env
+*.key
+
+# 런타임 산출물
+runs/
+artifacts/
+checkpoints/
+*.sqlite
+*.sqlite-*
+:memory:*
+
+# 데이터셋 (대용량) — 루트의 데이터셋 폴더만. 앞에 /를 안 붙이면
+# src/analysis_loop_v3/data/(패키지) 같은 하위 폴더까지 전부 무시돼버린다.
+/data/
+
+# 파이썬
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+
+# oh-my-claudecode 플러그인 세션 상태
+.omc/
+
+# web-dashboard (Next.js) — 자체 .gitignore가 node_modules/.next를 이미 막지만,
+# 루트에서 실수로 훑을 때를 대비해 한 번 더 명시한다.
+web-dashboard/node_modules/
+web-dashboard/.next/
