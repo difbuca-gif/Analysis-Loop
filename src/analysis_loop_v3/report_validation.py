@@ -12,7 +12,10 @@ _CITATION = re.compile(r"\[증거:\s*([A-Za-z0-9_-]+)\s*\]")
 _GOAL_MARKER = re.compile(r"\[목표:\s*([A-Za-z0-9_-]+)\s*\]")
 _TASK_MARKER = re.compile(r"\[작업:\s*([A-Za-z0-9_-]+)\s*\]")
 _STOP_MARKER = re.compile(r"\[종료:\s*([A-Z0-9_]+)\s*\]")
-_NUMBER = re.compile(r"(?<![A-Za-z0-9])(-?\d+\.\d+%?|-?\d+%)(?![A-Za-z0-9])")
+_NUMBER = re.compile(
+    r"(?<![A-Za-z0-9_.])[-+−]?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)"
+    r"(?:[eE][-+]?\d+)?%?(?![A-Za-z0-9_])"
+)
 _REQUIRED_SECTIONS = (
     "원래 목표와 실행 상태",
     "핵심 결론",
@@ -48,12 +51,15 @@ def _evidence_numbers(record: EvidenceRecord) -> list[float]:
 
 def _number_supported(token: str, allowed: list[float]) -> bool:
     percent = token.endswith("%")
-    value = float(token.rstrip("%"))
+    value = float(token.rstrip("%").replace(",", "").replace("−", "-"))
+    if not math.isfinite(value):
+        return False
     candidates = [value]
     if percent:
         candidates.append(value / 100.0)
     return any(
-        math.isclose(candidate, allowed_value, rel_tol=1e-6, abs_tol=1e-9)
+        math.isfinite(allowed_value)
+        and math.isclose(candidate, allowed_value, rel_tol=1e-6, abs_tol=0.0)
         for candidate in candidates
         for allowed_value in allowed
     )
@@ -148,15 +154,22 @@ def validate_report(
                 record = known.get(evidence_id)
                 if record is None or evidence_id not in allowed:
                     continue
-                allowed_numbers.extend(_evidence_numbers(record))
-                if numeric_support is not None:
+                if numeric_support is None:
+                    allowed_numbers.extend(_evidence_numbers(record))
+                else:
+                    # strict mode에서는 원본 Artifact만 수치의 근거다.
                     allowed_numbers.extend(numeric_support.get(evidence_id, []))
-            for token in _NUMBER.findall(stripped):
+            # ID와 목록 번호는 분석 수치가 아니다. 실제 본문의 정수는 검사한다.
+            numeric_text = _CITATION.sub("", stripped)
+            numeric_text = _GOAL_MARKER.sub("", numeric_text)
+            numeric_text = _TASK_MARKER.sub("", numeric_text)
+            numeric_text = re.sub(r"^\s*\d+[.)]\s+", "", numeric_text)
+            for token in _NUMBER.findall(numeric_text):
                 if allowed_numbers and _number_supported(token, allowed_numbers):
                     continue
                 message = (
                     f"{lineno}행 수치 {token}를 인용 Evidence의 "
-                    "effect/uncertainty/result 값에서 확인하지 못했다"
+                    "원본 결과 값에서 확인하지 못했다"
                 )
                 if numeric_support is None:
                     warnings.append(message)

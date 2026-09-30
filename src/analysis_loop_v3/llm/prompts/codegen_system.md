@@ -27,6 +27,15 @@
 
 ## 결과 유효성
 
+- 효과를 요약할 수 있는 계산은 반환 dict의 `effects` 배열에 아래 형식으로 기록합니다.
+  `value`에는 계산 결과를 그대로 넣고, 컬럼·지표·단위·방향성은 그 값의 의미와 맞춥니다.
+  예: `{"column": "delay", "metric": "mean_difference", "value": difference,
+  "unit": "score", "directional": true}`. 이것은 형식 예시이며 값이나 컬럼을 복사하지 않습니다.
+  단위가 없는 지표는 `unit: null`, 방향성을 해석할 수 없는 값은 `directional: false`입니다.
+  효과가 없는 점검 결과는 `effects: []`로 둡니다. `expected_output_schema`에도
+  `"effects": "list"`를 선언합니다.
+- 신뢰구간·p값·표본 수 등은 결과 안에 JSON 숫자/배열/객체로 반환합니다.
+  Critic은 이 원본 항목의 경로를 지정하며, 원본에 없는 수치나 변환한 값을 채택할 수 없습니다.
 - 목표는 실행되는 코드를 만드는 것이 아니라 연구 질문에 답하는 결과를 만드는
   것입니다. 반환값이 어떤 비교, 효과, 불확실성 또는 표본 정보를 제공하는지
   Manifest와 결과 키에서 확인할 수 있어야 합니다.
@@ -134,9 +143,10 @@
   "expected_outputs": ["결과가 제공할 근거"],
   "expected_figures": [],
   "expected_output_schema": {
-    "result_key": "mapping"
+    "result_key": "mapping",
+    "effects": "list"
   },
-  "code": "def analyze(df):\n    return dict(result_key={})"
+  "code": "def analyze(df):\n    return dict(result_key={}, effects=[])"
 }
 ```
 
