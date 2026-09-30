@@ -92,11 +92,16 @@
       "column": "효과를 측정한 실제 컬럼",
       "metric": "결과에 있는 지표",
       "value": 0.0,
-      "directional": true
+      "directional": true,
+      "unit": null,
+      "source_path": ["effects", 0]
     }
   ],
   "uncertainty_summary": {
-    "결과 경로 또는 지표명": "결과에 있는 불확실성 값"
+    "ci": [0.1, 0.3]
+  },
+  "uncertainty_source_paths": {
+    "ci": ["confidence_interval"]
   }
 }
 ```
@@ -110,5 +115,15 @@
   반환하십시오. 채울 내용이 없다고 `null`이나 빈 문자열을
   항목으로 넣지 마십시오 — 배열 자체를 비우는 것이 맞습니다.
 - `effect_summary`와 `uncertainty_summary`에는 실제 결과에 있는 값만 넣습니다.
+- 위 수치와 경로는 형식 예시입니다. 실제 결과의 값을 반올림·단위 변환 없이 복사합니다.
+- 각 효과의 `source_path`는 `column`, `metric`, `value`, `directional`, `unit`이
+  함께 있는 원본 효과 객체를 가리킵니다. 값 하나만 가리키지 마십시오.
+  경로의 문자열은 dict 키, 정수는 0부터 시작하는 배열 인덱스입니다.
+  메타데이터와 값 중 하나라도 다르면 코드가 응답을 거부합니다.
+- `uncertainty_source_paths`에는 `uncertainty_summary`의 모든 키에 대응하는
+  원본 경로를 넣습니다. 배열·객체는 일부를 추리거나 재계산하지 말고 그대로 복사합니다.
+  요약이 비어 있으면 경로 객체도 `{}`입니다.
+- 원본 항목이 없는 효과는 요약에 넣지 않습니다. 질문에 필요한 정량 근거가
+  결과에 없다면 `reject`하고 필요한 출력 항목을 `reasons`에 기록합니다.
 - `directional`은 값의 부호가 효과 방향인 대비·차이·계수 등에만 `true`입니다.
   그룹별 수준, 표본 수와 단순 건수는 `false`이거나 효과 목록에서 제외합니다.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from typing import Any
 
 from ...contracts import (
@@ -13,7 +15,7 @@ from ...contracts import (
     StopCode,
 )
 from ...llm.client import DEFAULT_READ_TIMEOUT
-from ...report_validation import validate_report
+from ...report_validation import validate_report, validate_semantic_review
 from ...runtime import RuntimeDeps
 from ...state import (
     AnalysisGraphState,
@@ -317,6 +319,48 @@ def _run_summary(state: AnalysisGraphState) -> dict[str, Any]:
         ],
     }
 
+async def _review_report(
+    state: AnalysisGraphState, deps: RuntimeDeps, *, markdown: str,
+    summary: dict[str, Any], evidence: list[EvidenceRecord],
+    cited_ids: set[str], results: dict[str, Any],
+) -> dict[str, Any]:
+    """구조·수치 검사를 통과한 초안에만 의미 검토를 요청한다. 실패하면 미검토다."""
+    outcome: dict[str, Any] = {
+        "passed": False, "status": "unreviewed",
+        "report_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    }
+    missing = cited_ids - results.keys()
+    reviewer = getattr(deps.critic, "review_report", None)
+    if missing:
+        outcome["error"] = f"인용 근거의 원본 결과를 읽을 수 없다: {sorted(missing)}"
+    elif not callable(reviewer):
+        outcome["error"] = "보고서 의미 검토 서비스가 없다"
+    else:
+        try:
+            profile = get_profile(state)
+            raw = await asyncio.wait_for(reviewer(
+                markdown=markdown, run_summary=summary,
+                evidence=[item.model_dump(mode="json") for item in evidence
+                          if item.evidence_id in cited_ids],
+                results={key: results[key] for key in sorted(cited_ids)},
+                dataset_profile=profile.model_dump(mode="json") if profile else None,
+                timeout_seconds=DEFAULT_READ_TIMEOUT,
+            ), timeout=DEFAULT_READ_TIMEOUT)
+            if raw is None:
+                reason = getattr(deps.critic, "last_error", None) or "응답이 없다"
+                raise ValueError(reason)
+            review = validate_semantic_review(raw, markdown=markdown, evidence_ids=cited_ids)
+            outcome.update(
+                passed=review.verdict == "accept",
+                status="accepted" if review.verdict == "accept" else "rejected",
+                review=review.model_dump(mode="json"),
+            )
+        except Exception as exc:  # noqa: BLE001 - 검토 실패로 보고서를 승인하지 않는다.
+            outcome["error"] = f"보고서 의미 검토 실패: {type(exc).__name__}: {exc}"[:500]
+    _event(state, deps, "REPORT_REVIEWED", outcome)
+    return outcome
+
+
 async def _write_report(
     state: AnalysisGraphState, deps: RuntimeDeps, summary: dict[str, Any],
 ) -> tuple[Any, bool]:
@@ -324,12 +368,14 @@ async def _write_report(
     all_evidence = get_evidence(state)
     reportable = _reportable_evidence(state)
     numeric_support: dict[str, list[float]] = {}
+    original_results: dict[str, Any] = {}
     for item in reportable:
         try:
             payload = deps.artifacts.read_json(item.result_ref)
         except (OSError, ValueError, TypeError):
             numeric_support[item.evidence_id] = []
             continue
+        original_results[item.evidence_id] = payload
 
         def collect(value: Any) -> list[float]:
             numbers: list[float] = []
@@ -376,14 +422,22 @@ async def _write_report(
             "citation_count": validation["citation_count"],
         })
         if validation["passed"]:
-            ref = deps.artifacts.put_text(
-                report_md, kind=ArtifactKind.REPORT, suffix=".md",
-                summary={
-                    "evidence_count": len(reportable),
-                    "citation_count": validation["citation_count"],
-                },
+            semantic = await _review_report(
+                state, deps, markdown=report_md, summary=summary, evidence=reportable,
+                cited_ids=set(validation["cited_evidence_ids"]), results=original_results,
             )
-            return ref, True
+            if semantic["passed"]:
+                ref = deps.artifacts.put_text(
+                    report_md, kind=ArtifactKind.REPORT, suffix=".md",
+                    summary={
+                        "evidence_count": len(reportable),
+                        "citation_count": validation["citation_count"],
+                        "semantic_review_passed": True,
+                        "report_sha256": semantic["report_sha256"],
+                    },
+                )
+                return ref, True
+            summary = {**summary, "report_review": semantic}
         summary = {**summary, "report_validation": validation}
     ref = deps.artifacts.put_json(
         summary, kind=ArtifactKind.REPORT,
