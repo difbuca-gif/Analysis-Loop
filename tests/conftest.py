@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from analysis_loop_v3.contracts import (
+    REPORT_REVIEW_CATEGORIES,
     ArtifactKind,
     ColumnProfile,
     DatasetProfile,
@@ -60,6 +61,11 @@ def harness(tmp_path, result_payload, review_payload):
     critic = SimpleNamespace(
         review=AsyncMock(return_value=deepcopy(review_payload)),
         generate_report=AsyncMock(return_value=None),
+        review_report=AsyncMock(side_effect=lambda **kwargs: {
+            "verdict": "accept", "checked_categories": list(REPORT_REVIEW_CATEGORIES),
+            "reviewed_evidence_ids": [e["evidence_id"] for e in kwargs["evidence"]],
+            "findings": [],
+        }),
     )
     deps = RuntimeDeps(artifacts=artifacts, sandbox=None, critic=critic, workdir_root=tmp_path)
     state = {

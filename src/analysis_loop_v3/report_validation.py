@@ -6,7 +6,7 @@ import math
 import re
 from typing import Any
 
-from .contracts import EvidenceRecord, EvidenceRelation
+from .contracts import EvidenceRecord, EvidenceRelation, ReportSemanticReview
 
 _CITATION = re.compile(r"\[증거:\s*([A-Za-z0-9_-]+)\s*\]")
 _GOAL_MARKER = re.compile(r"\[목표:\s*([A-Za-z0-9_-]+)\s*\]")
@@ -23,6 +23,26 @@ _REQUIRED_SECTIONS = (
     "한계와 미완료 사항",
 )
 _CITED_SECTIONS = {"핵심 결론", "목표 축별 근거"}
+
+
+def validate_semantic_review(
+    payload: Any, *, markdown: str, evidence_ids: set[str],
+) -> ReportSemanticReview:
+    """의미 판정 자체는 모델 몫이다. 코드는 검토 범위와 응답 참조의 무결성을 확인한다."""
+    review = ReportSemanticReview.model_validate(payload)
+    if (
+        len(review.reviewed_evidence_ids) != len(evidence_ids)
+        or set(review.reviewed_evidence_ids) != evidence_ids
+    ):
+        raise ValueError("의미 검토가 인용한 모든 근거를 포함하지 않거나 모르는 근거를 참조했다")
+    for finding in review.findings:
+        if not finding.quote.strip() or finding.quote not in markdown:
+            raise ValueError("검토 지적의 quote가 실제 보고서 문장에 없다")
+        if not finding.reason.strip() or not finding.suggested_revision.strip():
+            raise ValueError("검토 지적에는 이유와 수정 방향이 필요하다")
+        if set(finding.evidence_ids) - evidence_ids:
+            raise ValueError("검토 지적이 전달되지 않은 근거를 참조했다")
+    return review
 
 
 def _numeric_values(value: Any) -> list[float]:

@@ -13,6 +13,7 @@
 | [codegen_system.md](./codegen_system.md) | 분석 코드와 실행 계약 생성 | `LLMCodegen.generate` |
 | [critic_system.md](./critic_system.md) | 실행 결과 검토와 근거 채택 판정 | `LLMCritic.review` |
 | [report_system.md](./report_system.md) | 채택 근거 기반 최종 보고서 작성 | `LLMCritic.generate_report` |
+| [report_review_system.md](./report_review_system.md) | 보고서의 해석·권고를 원본 결과 및 한계와 대조 | `LLMCritic.review_report` |
 
 ## 경계
 

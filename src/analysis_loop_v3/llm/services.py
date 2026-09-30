@@ -17,6 +17,7 @@ from ..contracts import (
     DatasetProfile,
     FindingDigest,
     GeneratedAnalysis,
+    ReportSemanticReview,
     ResearchIntent,
     SubGoal,
 )
@@ -560,6 +561,7 @@ class LLMCritic(_RoleService):
                         "question",
                         "claim",
                         "method",
+                        "protocol",
                         "columns_used",
                         "effect_summary",
                         "uncertainty_summary",
@@ -591,6 +593,42 @@ class LLMCritic(_RoleService):
             # 보고서 생성 실패 시 finalize 폴백 사용
             self.last_failure_kind = "response_invalid"
             self.last_error = f"{type(exc).__name__}: {exc}"[:400]
+            return None
+
+    async def review_report(
+        self, *, markdown: str, run_summary: dict[str, Any],
+        evidence: list[dict[str, Any]], results: dict[str, Any],
+        dataset_profile: dict[str, Any] | None, timeout_seconds: float,
+    ) -> dict[str, Any] | None:
+        """완성된 보고서를 새 요청으로 검토한다. 기본 모델은 보고서 생성 모델과 같다."""
+        payload = {
+            "검토할 보고서": markdown,
+            "실행 상태": {
+                key: run_summary.get(key) for key in (
+                    "objective", "status", "stop_code", "stop_reason", "goals",
+                    "incomplete_goal_ids", "pending_task_ids", "unresolved_contradictions",
+                )
+            },
+            "데이터 구조": dataset_profile,
+            "인용 근거": [
+                {key: record.get(key) for key in (
+                    "evidence_id", "question", "claim", "method", "protocol",
+                    "columns_used", "effect_summary", "uncertainty_summary",
+                    "confidence", "caveats", "open_questions", "contradicts",
+                )}
+                for record in evidence
+            ],
+            "인용 근거의 원본 결과": results,
+        }
+        self._begin()
+        try:
+            raw = await self.client.generate_json(
+                prompt=_dumps(payload), system=load_prompt("report_review_system"),
+                timeout_seconds=timeout_seconds, role="report_review",
+            )
+            return ReportSemanticReview.model_validate(raw).model_dump(mode="json")
+        except Exception as exc:
+            self._fail(exc, message=f"보고서 의미 검토 실패: {type(exc).__name__}: {exc}"[:400])
             return None
 
 def build_services(
