@@ -9,10 +9,20 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
-# durable Evidence는 DataLineage 필수
-SCHEMA_VERSION = 8
+# 수치 출처를 검사하지 않은 이전 체크포인트는 새 실행에서 재사용하지 않는다.
+SCHEMA_VERSION = 9
+
+ResultPath = list[StrictStr | StrictInt]
 
 # 결과 크기 상한
 
@@ -257,7 +267,7 @@ class ResearchIntent(BaseModel):
             payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
         ).encode("utf-8")
         # 구버전 캐시 재사용 금지
-        return "intent-v2:" + hashlib.sha256(encoded).hexdigest()
+        return "intent-numeric-v1:" + hashlib.sha256(encoded).hexdigest()
 
 # GeneratedAnalysis: Codegen 실행 Manifest
 
@@ -479,19 +489,22 @@ class ValidationReport(BaseModel):
 # Evidence: 채택 후 불변
 
 class EffectEstimate(BaseModel):
-    """Critic이 추출한 단일 효과 추정치."""
+    """원본 결과 항목에 연결된 단일 효과 추정치."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     column: str
     metric: str
-    value: float
-    directional: bool = False
+    value: float = Field(strict=True, allow_inf_nan=False)
+    directional: bool = Field(default=False, strict=True)
+    unit: str | None = None
+    # 과거 결과 열람과 single-model baseline은 허용하되 새 Critic 채택 시 필수 검사한다.
+    source_path: ResultPath | None = Field(default=None, min_length=1)
 
 class EvidenceRecord(BaseModel):
     """채택 Evidence의 불변 레코드.
 
-    실제 수치는 result_ref의 artifact에 있고 여기엔 Critic이 검토한 값만 둔다(V2와 차이).
+    실제 수치는 result_ref에 있고, 요약은 원본 경로·메타데이터·값을 대조한 뒤 저장한다.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -516,6 +529,7 @@ class EvidenceRecord(BaseModel):
     # 다음 회차용 요약
     effect_summary: list[EffectEstimate] = Field(default_factory=list)
     uncertainty_summary: dict[str, Any] = Field(default_factory=dict)
+    uncertainty_source_paths: dict[str, ResultPath] = Field(default_factory=dict)
     confidence: Literal["high", "medium", "low", "unreviewed"] = "unreviewed"
     open_questions: list[str] = Field(default_factory=list)
     contradicts: list[str] = Field(default_factory=list)
@@ -715,12 +729,57 @@ class CriticReview(BaseModel):
     # 의미 판정은 Critic 결과 사용
     effect_summary: list[EffectEstimate] = Field(default_factory=list)
     uncertainty_summary: dict[str, Any] = Field(default_factory=dict)
+    uncertainty_source_paths: dict[str, ResultPath] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _accepted_review_requires_claim(self) -> CriticReview:
         if self.verdict == "accept" and not self.claim.strip():
             raise ValueError("accept 판정에는 실제 결과가 뒷받침하는 claim이 필요하다")
         return self
+
+# 보고서 의미 검토 응답 계약
+
+ReportReviewCategory = Literal[
+    "evidence_support", "causal_scope", "metric_context",
+    "uncertainty", "recommendations", "completion_status",
+]
+REPORT_REVIEW_CATEGORIES: tuple[ReportReviewCategory, ...] = (
+    "evidence_support", "causal_scope", "metric_context",
+    "uncertainty", "recommendations", "completion_status",
+)
+
+
+class ReportReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: ReportReviewCategory
+    quote: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    suggested_revision: str = Field(min_length=1)
+    evidence_ids: list[str]
+
+
+class ReportSemanticReview(BaseModel):
+    """보고서 의미 검토 응답. 검토 항목 선언만으로 판정의 정확성이 보장되지는 않는다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: Literal["accept", "reject"]
+    checked_categories: list[ReportReviewCategory]
+    reviewed_evidence_ids: list[str]
+    findings: list[ReportReviewFinding]
+
+    @model_validator(mode="after")
+    def _complete_review(self) -> ReportSemanticReview:
+        if (
+            len(self.checked_categories) != len(REPORT_REVIEW_CATEGORIES)
+            or set(self.checked_categories) != set(REPORT_REVIEW_CATEGORIES)
+        ):
+            raise ValueError("보고서 의미 검토의 여섯 항목을 각각 확인해야 한다")
+        if (self.verdict == "accept") != (not self.findings):
+            raise ValueError("accept에는 지적이 없어야 하고 reject에는 지적이 필요하다")
+        return self
+
 
 # HITL 승인
 

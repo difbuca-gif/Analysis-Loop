@@ -31,6 +31,7 @@ from ...state import (
     get_sub_goals,
 )
 from ...validation.checks import validate_critic_references
+from ...validation.numeric import bind_review_to_result
 from ._shared import _event, _load_generated, is_stuck
 
 # 결정론적 검증 통과 결과만 Critic 검토
@@ -71,6 +72,7 @@ async def critique(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, An
             generated,
             evidence_ids={e.evidence_id for e in get_evidence(state)},
         )
+        parsed = bind_review_to_result(parsed, payload)
     except ValueError as exc:
         _event(
             state, deps, "CRITIC_RESPONSE_INVALID",
@@ -132,6 +134,7 @@ def _build_evidence(
         # 다음 회차용 요약
         effect_summary=review.effect_summary,
         uncertainty_summary=review.uncertainty_summary,
+        uncertainty_source_paths=review.uncertainty_source_paths,
         confidence=review.confidence,
         # Critic 미해결 질문 보존
         open_questions=review.open_questions,
@@ -412,6 +415,13 @@ async def commit_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[
     )
     generated = _load_generated(state, deps)
     review = CriticReview.model_validate(state.get("review") or {})
+    # 체크포인트 재개나 직접 노드 호출도 같은 채택 경계를 통과해야 한다.
+    if review.verdict != "accept":
+        raise ValueError("accept 판정만 Evidence로 저장할 수 있다")
+    validate_critic_references(
+        review, generated, evidence_ids={e.evidence_id for e in get_evidence(state)},
+    )
+    review = bind_review_to_result(review, deps.artifacts.read_json(result_ref))
 
     evidence = _build_evidence(
         state, intent=intent, review=review, generated=generated,

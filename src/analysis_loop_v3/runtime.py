@@ -245,6 +245,17 @@ class CriticService(Protocol):
         validation_warnings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None: ...
 
+    async def generate_report(
+        self, *, run_summary: dict[str, Any], evidence: list[dict[str, Any]],
+        rejected: list[dict[str, Any]], timeout_seconds: float,
+    ) -> str | None: ...
+
+    async def review_report(
+        self, *, markdown: str, run_summary: dict[str, Any],
+        evidence: list[dict[str, Any]], results: dict[str, Any],
+        dataset_profile: dict[str, Any] | None, timeout_seconds: float,
+    ) -> dict[str, Any] | None: ...
+
 class SandboxService(Protocol):
     """생성 코드 실행기 프로토콜.
 

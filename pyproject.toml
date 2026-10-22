@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff>=0.5"]
+dev = ["ruff>=0.5", "pytest>=8"]
 postgres = [
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",
@@ -56,6 +56,10 @@ analysis_loop_v3 = ["llm/prompts/*.md", "llm/wiki/*.md"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.ruff.lint.per-file-ignores]
 # LLM 경계의 공급자/파서 오류를 상태로 변환한다.
