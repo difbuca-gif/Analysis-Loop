@@ -11,13 +11,13 @@ from .contract_models.analysis import (
     SchemaType,
 )
 from .contract_models.base import (
+    MAX_RESULT_BYTES,
+    RUN_ID_PATTERN,
+    SCHEMA_VERSION,
     DataApplicability,
     DescriptionItem,
     InvalidRunId,
-    MAX_RESULT_BYTES,
     ResultPath,
-    RUN_ID_PATTERN,
-    SCHEMA_VERSION,
     validate_run_id,
 )
 from .contract_models.data import (
