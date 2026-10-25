@@ -10,6 +10,11 @@ from analysis_loop_v3.orchestration.nodes.planning import _apply_goal_verdict
 from analysis_loop_v3.orchestration.nodes.program import validate_code
 from analysis_loop_v3.orchestration.nodes.progress import _run_summary, _write_report
 from analysis_loop_v3.orchestration.nodes.running import validate_result
+from analysis_loop_v3.runtime import (
+    ArtifactStore,
+    RuntimeDeps,
+    SandboxResult,
+)
 
 
 def test_legacy_graph_route_imports_remain_available():
@@ -25,3 +30,9 @@ def test_legacy_node_helper_imports_remain_available():
     assert callable(validate_result)
     assert callable(_run_summary)
     assert callable(_write_report)
+
+
+def test_runtime_compatibility_exports_remain_available():
+    assert ArtifactStore is not None
+    assert RuntimeDeps is not None
+    assert SandboxResult is not None
