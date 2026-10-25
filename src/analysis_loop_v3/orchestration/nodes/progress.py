@@ -1,7 +1,7 @@
 """분석 진행 여부와 Goal 확장 판단.
 
 종료 정책은 progress_policy.py, 보고서 생성은 reporting.py에 분리한다.
-기존 private helper import 경로는 compatibility alias로 유지한다.
+기존 private helper import 경로는 compatibility wrapper로 유지한다.
 """
 
 from __future__ import annotations
@@ -21,19 +21,13 @@ from ...state import (
     remaining_seconds,
     terminal_update,
 )
+from . import reporting as _reporting
 from ._shared import _event
 from .progress_policy import (
     MAX_GOAL_EXPANSIONS,
     MIN_SECONDS_FOR_EXPANSION,
     _repair_contradiction_agenda,
     _terminal_after_expansion,
-)
-from .reporting import (
-    _reportable_evidence,
-    _review_report,
-    _run_summary,
-    _write_report,
-    finalize,
 )
 
 
@@ -205,6 +199,49 @@ async def expand_goals(
         "sub_goals": [goal.model_dump(mode="json") for goal in merged],
         "goal_expansions": expansions + 1,
     }
+
+
+# -- compatibility wrappers -------------------------------------------------
+# 기존 테스트/호출부가 progress 모듈의 helper를 직접 참조해도 동작하게 유지한다.
+_reportable_evidence = _reporting.reportable_evidence
+_run_summary = _reporting.run_summary
+
+
+async def _review_report(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return await _reporting.review_report(
+        state,
+        deps,
+        timeout_seconds=DEFAULT_READ_TIMEOUT,
+        **kwargs,
+    )
+
+
+async def _write_report(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    summary: dict[str, Any],
+) -> tuple[Any, bool]:
+    return await _reporting.write_report(
+        state,
+        deps,
+        summary,
+        timeout_seconds=DEFAULT_READ_TIMEOUT,
+    )
+
+
+async def finalize(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+) -> dict[str, Any]:
+    return await _reporting.finalize(
+        state,
+        deps,
+        timeout_seconds=DEFAULT_READ_TIMEOUT,
+    )
 
 
 __all__ = [
