@@ -23,6 +23,7 @@ from ...state import (
 )
 from ...validation.checks import validate_critic_references
 from ...validation.numeric import bind_review_to_result
+from ..node_updates import CritiqueUpdate, EvidenceCommitUpdate, RejectionUpdate
 from ._shared import _event, _load_generated
 from .rejection_policy import _rejection_reasons, _stuck_issue
 from .review_agenda import _agenda_after_commit
@@ -31,11 +32,13 @@ from .review_evidence import (
     _cache_program,
     _goals_with_evidence,
     _relations_after_commit,
-    _revalidation_changed_conditions,
 )
 
 
-async def critique(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, Any]:
+async def critique(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+) -> CritiqueUpdate:
     """결정론적 검증을 통과한 결과만 Critic에게 의미 검토를 요청한다."""
     if deps.critic is None:
         _event(state, deps, "CRITIC_UNAVAILABLE")
@@ -101,7 +104,10 @@ async def critique(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, An
     return {"review": parsed.model_dump(mode="json")}
 
 
-async def commit_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, Any]:
+async def commit_evidence(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+) -> EvidenceCommitUpdate:
     """Critic 승인 결과를 Evidence와 관련 상태에 일관되게 반영한다."""
     intent = get_intent(state)
     result_ref = get_ref(state, "candidate_ref")
@@ -171,7 +177,7 @@ async def commit_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[
         evidence=evidence,
     )
 
-    update: dict[str, Any] = {
+    update: EvidenceCommitUpdate = {
         "evidence": [evidence.model_dump(mode="json")],
         "evidence_relations": [
             item.model_dump(mode="json")
@@ -222,13 +228,16 @@ async def commit_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[
     return update
 
 
-async def reject_attempt(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, Any]:
+async def reject_attempt(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+) -> RejectionUpdate:
     """실패/거부된 회차를 기록하고 재계획 가능한 상태로 복원한다."""
     intent = get_intent(state)
     review = state.get("review") or {}
     reasons = _rejection_reasons(state, review)
 
-    payload: dict[str, Any] = {"intent": None}
+    payload: RejectionUpdate = {"intent": None}
     if intent is not None and intent.task_id:
         agenda: list[dict[str, Any]] = []
         released = False
