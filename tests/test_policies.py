@@ -81,6 +81,8 @@ def test_mark_data_limited_requires_prior_attempt():
         hypothesis="현재 데이터로는 확인할 수 없다",
         goal_id="g1",
         task_id=task.task_id,
+        purpose="deepen",
+        parent_evidence_ids=["e1"],
         execution_mode="mark_data_limited",
     )
 
