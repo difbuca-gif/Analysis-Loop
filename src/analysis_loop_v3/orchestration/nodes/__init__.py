@@ -1,15 +1,21 @@
-"""State 업데이트를 반환하는 체크포인트 단위 그래프 노드.
+"""LangGraph에서 실행되는 Node의 안정적인 import surface.
 
-실행 흐름과 책임:
-    planning           무엇을 물을지    profile_data / decompose_objective / plan_intent
-    program            코드 확보        lookup_program / generate_code
-    code_validation    코드 계약 검증   validate_code
-    running            실제 실행        execute
-    result_validation  결과 계약 검증   validate_result
-    review             의미 판정        critique / commit_evidence / reject_attempt
-    progress           계속/종료        assess_progress / expand_goals / finalize
+Node와 세부 정책을 분리한다.
 
-여기서 그래프 노드를 re-export하므로 `nodes.execute` 같은 기존 호출부는 유지한다.
+    planning.py          Planner orchestration
+    program.py           코드 조회/생성
+    code_validation.py   코드 계약 검증
+    running.py           Sandbox 실행
+    result_validation.py 결과 계약 검증
+    review.py            Critic / Evidence commit orchestration
+    progress.py          진행/종료 orchestration
+    reporting.py         최종 보고서 pipeline
+
+세부 규칙은 planner_context / goal_policy / intent_policy /
+review_evidence / review_agenda / rejection_policy / progress_policy에 둔다.
+
+그래프는 이 모듈에서 Node를 re-export하므로 `nodes.execute` 같은 기존 호출부를
+유지할 수 있다.
 """
 
 from ._shared import (
