@@ -51,6 +51,7 @@ END
 |---|---|
 | `nodes/planning.py` | Profile, SubGoal 분해, Planner 호출 orchestration |
 | `nodes/planner_context.py` | Planner에 전달할 Evidence 선택 |
+| `nodes/planner_decision.py` | Planner 응답 이후 Goal 진행·실패·Intent 거부 판정 |
 | `nodes/goal_policy.py` | SubGoal converge/abandon 적용 규칙 |
 | `nodes/intent_policy.py` | Agenda/중복/재사용 Intent 정책 |
 | `nodes/program.py` | 프로그램 cache 조회와 Codegen 호출 |
