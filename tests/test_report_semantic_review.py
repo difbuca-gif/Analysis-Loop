@@ -11,6 +11,7 @@ from analysis_loop_v3.contracts import REPORT_REVIEW_CATEGORIES
 from analysis_loop_v3.llm.services import LLMCritic
 from analysis_loop_v3.orchestration.nodes.reporting import run_summary, write_report
 from analysis_loop_v3.orchestration.nodes.review import commit_evidence, critique
+from analysis_loop_v3.runtime_protocols import ServiceResult
 
 
 def report(statement, evidence_id):
@@ -73,9 +74,11 @@ def write(state, deps, **kwargs):
 def test_reviewer_finding_blocks_report(report_harness, category, statement):
     # 탐지 성능 측정이 아니라, 각 의미 문제를 지적받았을 때 채택을 막는 경로다.
     state, deps, eid = report_harness
-    deps.critic.generate_report.return_value = report(statement, eid)
+    deps.critic.generate_report.return_value = ServiceResult(value=report(statement, eid))
     deps.critic.review_report.side_effect = None
-    deps.critic.review_report.return_value = assessment(eid, category=category, quote=statement)
+    deps.critic.review_report.return_value = ServiceResult(
+        value=assessment(eid, category=category, quote=statement)
+    )
     ref, accepted = write(state, deps)
     assert not accepted
     saved = deps.artifacts.read_json(ref)
@@ -88,7 +91,7 @@ def test_reviewer_finding_blocks_report(report_harness, category, statement):
 def test_qualified_recommendation_can_be_accepted(report_harness):
     state, deps, eid = report_harness
     markdown = report("정산 오류를 확정할 수 없으므로 데이터 정의와 표본을 먼저 확인한다.", eid)
-    deps.critic.generate_report.return_value = markdown
+    deps.critic.generate_report.return_value = ServiceResult(value=markdown)
     ref, accepted = write(state, deps)
     assert accepted
     assert deps.artifacts.read_text(ref) == markdown
@@ -118,7 +121,7 @@ def test_qualified_recommendation_can_be_accepted(report_harness):
 def test_incomplete_or_invalid_review_cannot_approve(report_harness, defect):
     state, deps, eid = report_harness
     statement = "정산 로직 긴급 감사를 최우선으로 시행해야 한다."
-    deps.critic.generate_report.return_value = report(statement, eid)
+    deps.critic.generate_report.return_value = ServiceResult(value=report(statement, eid))
     response = assessment(eid, category="recommendations", quote=statement)
     if defect == "missing_category":
         response["checked_categories"].pop()
@@ -139,7 +142,7 @@ def test_incomplete_or_invalid_review_cannot_approve(report_harness, defect):
     else:
         response = None
     deps.critic.review_report.side_effect = None
-    deps.critic.review_report.return_value = response
+    deps.critic.review_report.return_value = ServiceResult(value=response)
     ref, accepted = write(state, deps)
     assert not accepted
     assert deps.artifacts.read_json(ref)["report_review"]["status"] == "unreviewed"
@@ -147,7 +150,7 @@ def test_incomplete_or_invalid_review_cannot_approve(report_harness, defect):
 
 def test_structural_or_numeric_failure_never_calls_semantic_reviewer(report_harness):
     state, deps, eid = report_harness
-    deps.critic.generate_report.return_value = report("평균은 999다.", eid)
+    deps.critic.generate_report.return_value = ServiceResult(value=report("평균은 999다.", eid))
     _, accepted = write(state, deps)
     assert not accepted
     deps.critic.review_report.assert_not_awaited()
@@ -155,8 +158,8 @@ def test_structural_or_numeric_failure_never_calls_semantic_reviewer(report_harn
 
 def test_missing_result_blocks_even_non_numeric_claim(report_harness):
     state, deps, eid = report_harness
-    deps.critic.generate_report.return_value = report(
-        "관찰 결과를 토대로 추가 검토를 제안한다.", eid
+    deps.critic.generate_report.return_value = ServiceResult(
+        value=report("관찰 결과를 토대로 추가 검토를 제안한다.", eid)
     )
     Path(state["candidate_ref"]["path"]).unlink()
     ref, accepted = write(state, deps)
@@ -170,7 +173,9 @@ def test_missing_result_blocks_even_non_numeric_claim(report_harness):
 @pytest.mark.parametrize("failure", ["missing_service", "transport", "timeout"])
 def test_reviewer_unavailable_is_not_approval(report_harness, failure):
     state, deps, eid = report_harness
-    deps.critic.generate_report.return_value = report("추가 검증이 필요하다.", eid)
+    deps.critic.generate_report.return_value = ServiceResult(
+        value=report("추가 검증이 필요하다.", eid)
+    )
     if failure == "missing_service":
         del deps.critic.review_report
     elif failure == "transport":

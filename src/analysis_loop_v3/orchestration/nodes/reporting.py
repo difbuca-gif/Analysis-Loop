@@ -80,24 +80,31 @@ async def write_report(
         numeric_support[item.evidence_id] = _collect_numeric_values(payload)
 
     budget_exhausted = state.get("stop_code") == StopCode.BUDGET_EXHAUSTED.value
+    service_failure = state.get("service_failure")
     critic_unavailable = (
         state.get("stop_code") == StopCode.SERVICE_UNAVAILABLE.value
-        and service_failure_action(getattr(deps.critic, "last_failure_kind", None)) == "stop_run"
+        and service_failure is not None
+        and service_failure["role"] == "critic"
+        and service_failure_action(service_failure["kind"]) == "stop_run"
     )
     can_generate_report = (
         deps.critic is not None and not budget_exhausted and not critic_unavailable
     )
     report_md = None
+    failure_kind = service_failure["kind"] if critic_unavailable and service_failure else None
     if can_generate_report and deps.critic is not None:
-        report_md = await deps.critic.generate_report(
+        result = await deps.critic.generate_report(
             run_summary=summary,
             evidence=[item.model_dump(mode="json") for item in reportable],
             rejected=state.get("rejected") or [],
             timeout_seconds=timeout_seconds,
         )
 
+        report_md = result.value
+        failure_kind = result.failure_kind
+
     if report_md is None and deps.critic is not None:
-        kind = getattr(deps.critic, "last_failure_kind", None)
+        kind = failure_kind
         if kind and service_failure_action(kind, stage="report") == "fallback_report":
             _event(state, deps, "REPORT_FALLBACK", {"kind": kind})
 
@@ -184,7 +191,7 @@ async def review_report(
     else:
         try:
             profile = get_profile(state)
-            raw = await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 reviewer(
                     markdown=markdown,
                     run_summary=summary,
@@ -199,9 +206,9 @@ async def review_report(
                 ),
                 timeout=timeout_seconds,
             )
+            raw = result.value
             if raw is None:
-                reason = getattr(deps.critic, "last_error", None) or "응답이 없다"
-                raise ValueError(reason)
+                raise ValueError(result.error or "응답이 없다")
             review = validate_semantic_review(
                 raw,
                 markdown=markdown,

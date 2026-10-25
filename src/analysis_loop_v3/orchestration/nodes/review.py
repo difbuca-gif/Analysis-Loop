@@ -27,12 +27,12 @@ from ...validation.numeric import bind_review_to_result
 from ..failure_policy import service_failure_action
 from ..node_updates import CritiqueUpdate, EvidenceCommitUpdate, RejectionUpdate
 from ._shared import _event, _load_generated, is_stuck
-from .review_agenda import _agenda_after_commit
+from .review_agenda import agenda_after_commit
 from .review_evidence import (
-    _build_evidence,
-    _cache_program,
-    _goals_with_evidence,
-    _relations_after_commit,
+    build_evidence,
+    cache_program,
+    goals_with_evidence,
+    relations_after_commit,
 )
 
 
@@ -58,7 +58,7 @@ async def critique(
     generated = _load_generated(state, deps)
     payload = deps.artifacts.read_json(ref)
 
-    review = await deps.critic.review(
+    result = await deps.critic.review(
         intent=intent,
         manifest=generated,
         result_summary=payload if isinstance(payload, dict) else {"value": payload},
@@ -66,13 +66,14 @@ async def critique(
         prior_findings=[FindingDigest.from_evidence(e) for e in active_evidence(state)],
         validation_warnings=state.get("validation_warnings", []),
     )
+    review = result.value
     if review is None:
-        reason = getattr(deps.critic, "last_error", None) or "이유 불명"
+        reason = result.error or "이유 불명"
         _event(state, deps, "CRITIC_FAILED", {"reason": reason})
         update: CritiqueUpdate = {
             "review": {"verdict": "unreviewed", "reasons": ["critic 호출 실패"]},
         }
-        kind = getattr(deps.critic, "last_failure_kind", None)
+        kind = result.failure_kind
         if service_failure_action(kind) == "stop_run":
             update.update(
                 terminal_update(
@@ -81,6 +82,7 @@ async def critique(
                     reason=f"critic 실패: {reason}",
                 )
             )
+        update["service_failure"] = {"role": "critic", "kind": kind, "message": reason}
         return update
 
     try:
@@ -158,7 +160,7 @@ async def commit_evidence(
         deps.artifacts.read_json(result_ref),
     )
 
-    evidence = _build_evidence(
+    evidence = build_evidence(
         state,
         intent=intent,
         review=review,
@@ -170,7 +172,7 @@ async def commit_evidence(
     )
 
     if program_ref is not None:
-        _cache_program(
+        cache_program(
             state,
             deps,
             intent=intent,
@@ -188,13 +190,13 @@ async def commit_evidence(
         }
     )
 
-    agenda, created_tasks, completed_task_id = _agenda_after_commit(
+    agenda, created_tasks, completed_task_id = agenda_after_commit(
         state,
         intent=intent,
         review=review,
         evidence=evidence,
     )
-    relations = _relations_after_commit(
+    relations = relations_after_commit(
         state,
         intent=intent,
         review=review,
@@ -209,7 +211,7 @@ async def commit_evidence(
         "intent": None,
     }
     if intent.goal_id:
-        goals = _goals_with_evidence(
+        goals = goals_with_evidence(
             state,
             intent.goal_id,
             evidence.evidence_id,

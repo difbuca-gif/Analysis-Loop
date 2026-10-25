@@ -1,3 +1,5 @@
+from analysis_loop_v3.runtime_protocols import ServiceResult
+
 """예산 갱신은 중단된 그래프의 실행 위치와 완료 상태를 보존해야 한다."""
 
 import asyncio
@@ -37,9 +39,9 @@ def _service_with_completed_prefix(state, deps, monkeypatch):
         "validate_result",
     ):
         monkeypatch.setattr(nodes, name, stub(name))
-    deps.critic.review = AsyncMock(return_value=None)
-    deps.critic.last_error = "offline"
-    deps.critic.last_failure_kind = "provider_unavailable"
+    deps.critic.review = AsyncMock(
+        return_value=ServiceResult(error="offline", failure_kind="provider_unavailable")
+    )
     return AnalysisService(deps, InMemorySaver()), completed
 
 
@@ -112,9 +114,9 @@ def test_resume_with_budget_runs_only_remaining_nodes(harness, monkeypatch, back
         schema_version=SCHEMA_VERSION, status="RUNNING", iteration=3, deadline_at=time.time() + 60
     )
     # The first remaining step is critique; its outage should end the graph.
-    deps.critic.review = AsyncMock(return_value=None)
-    deps.critic.last_error = "offline"
-    deps.critic.last_failure_kind = "provider_unavailable"
+    deps.critic.review = AsyncMock(
+        return_value=ServiceResult(error="offline", failure_kind="provider_unavailable")
+    )
     service, completed = _service_with_completed_prefix(state, deps, monkeypatch)
     config = {"configurable": {"thread_id": state["run_id"]}}
 

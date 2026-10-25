@@ -20,6 +20,7 @@ from .contracts import (
     SubGoal,
 )
 from .orchestration.node_updates import CycleResetUpdate, TerminalUpdate
+from .runtime_protocols import ServiceFailure
 
 
 def _append(left: list[Any] | None, right: list[Any] | None) -> list[Any]:
@@ -87,6 +88,7 @@ class AnalysisGraphState(TypedDict, total=False):
 
     # --- 종료 ---
     status: str
+    service_failure: ServiceFailure | None
     # stop_code와 stop_reason은 함께 설정
     stop_code: str | None
     stop_reason: str | None
@@ -94,6 +96,7 @@ class AnalysisGraphState(TypedDict, total=False):
 
 
 # 생성
+
 
 def new_state(
     *,
@@ -151,13 +154,18 @@ def new_state(
         stop_code=None,
         stop_reason=None,
         report_ref=None,
+        service_failure=None,
     )
 
 
 # 타입 있는 접근자 — State 값을 계약 모델로 복원한다.
 
+
 def terminal_update(
-    *, status: RunStatus, stop_code: StopCode, reason: str,
+    *,
+    status: RunStatus,
+    stop_code: StopCode,
+    reason: str,
 ) -> TerminalUpdate:
     """status/stop_code/stop_reason 일괄 갱신."""
     reason = reason.strip()
@@ -174,6 +182,7 @@ def cycle_reset_update() -> CycleResetUpdate:
     """새 Intent 시작 전 회차 임시 state 초기화."""
     return {
         "last_planner_error": None,
+        "service_failure": None,
         "program_ref": None,
         "manifest": None,
         "candidate_ref": None,
@@ -263,7 +272,8 @@ def active_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
 def current_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
     """현재 snapshot에 직접 적용 가능한 active Evidence."""
     return [
-        item for item in active_evidence(state)
+        item
+        for item in active_evidence(state)
         if evidence_data_applicability(state, item) == "exact_snapshot"
     ]
 
@@ -273,17 +283,11 @@ def get_agenda(state: AnalysisGraphState) -> list[AgendaTask]:
 
 
 def pending_agenda_tasks(state: AnalysisGraphState) -> list[AgendaTask]:
-    return [
-        item for item in get_agenda(state)
-        if item.status in {"pending", "in_progress"}
-    ]
+    return [item for item in get_agenda(state) if item.status in {"pending", "in_progress"}]
 
 
 def get_evidence_relations(state: AnalysisGraphState) -> list[EvidenceRelation]:
-    return [
-        EvidenceRelation.model_validate(item)
-        for item in state.get("evidence_relations") or []
-    ]
+    return [EvidenceRelation.model_validate(item) for item in state.get("evidence_relations") or []]
 
 
 def unresolved_contradictions(

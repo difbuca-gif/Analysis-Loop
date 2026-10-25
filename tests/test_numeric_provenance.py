@@ -18,10 +18,16 @@ def test_matching_review_is_copied_from_result(review_payload, result_payload):
     assert bound.uncertainty_summary["ci"] == [1.0, 1.5]
 
 
-@pytest.mark.parametrize(("field", "wrong"), [
-    ("value", 999.0), ("column", "other"), ("metric", "p_value"),
-    ("unit", "%"), ("directional", True),
-])
+@pytest.mark.parametrize(
+    ("field", "wrong"),
+    [
+        ("value", 999.0),
+        ("column", "other"),
+        ("metric", "p_value"),
+        ("unit", "%"),
+        ("directional", True),
+    ],
+)
 def test_effect_must_match_its_source_object(review_payload, result_payload, field, wrong):
     review_payload["effect_summary"][0][field] = wrong
     # 같은 숫자가 다른 곳에 있어도 지정한 효과 항목과 다르면 거부한다.
@@ -30,8 +36,19 @@ def test_effect_must_match_its_source_object(review_payload, result_payload, fie
         bind_review_to_result(CriticReview.model_validate(review_payload), result_payload)
 
 
-@pytest.mark.parametrize("path", [None, [], ["missing"], ["effects", -1], ["effects", 5],
-                                  ["effects", "0"], ["effects", True], ["effects", 0, "value"]])
+@pytest.mark.parametrize(
+    "path",
+    [
+        None,
+        [],
+        ["missing"],
+        ["effects", -1],
+        ["effects", 5],
+        ["effects", "0"],
+        ["effects", True],
+        ["effects", 0, "value"],
+    ],
+)
 def test_invalid_effect_paths_are_rejected(review_payload, result_payload, path):
     review_payload["effect_summary"][0]["source_path"] = path
     with pytest.raises(ValueError):
@@ -86,7 +103,7 @@ def test_effectless_review_is_allowed():
 @pytest.mark.parametrize("wrong", [999.0, -1.25])
 def test_bad_critic_goes_to_rejection(harness, wrong):
     state, deps = harness
-    deps.critic.review.return_value["effect_summary"][0]["value"] = wrong
+    deps.critic.review.return_value.value["effect_summary"][0]["value"] = wrong
     update = asyncio.run(critique(state, deps))
     assert update["review"]["verdict"] == "unreviewed"
     assert route_after_critique({**state, **update}) == "reject_attempt"
@@ -96,7 +113,7 @@ def test_bad_critic_goes_to_rejection(harness, wrong):
 
 def test_missing_path_cannot_be_accepted_from_old_critic(harness):
     state, deps = harness
-    del deps.critic.review.return_value["effect_summary"][0]["source_path"]
+    del deps.critic.review.return_value.value["effect_summary"][0]["source_path"]
     update = asyncio.run(critique(state, deps))
     assert route_after_critique({**state, **update}) == "reject_attempt"
 
@@ -114,7 +131,7 @@ def test_valid_review_is_committed_with_provenance(harness):
 
 def test_commit_rechecks_review_before_any_side_effect(harness):
     state, deps = harness
-    state["review"] = deepcopy(deps.critic.review.return_value)
+    state["review"] = deepcopy(deps.critic.review.return_value.value)
     state["review"]["effect_summary"][0]["value"] = 999
     with pytest.raises(ValueError, match="value"):
         asyncio.run(commit_evidence(state, deps))

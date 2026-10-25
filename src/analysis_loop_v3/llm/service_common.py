@@ -17,6 +17,7 @@ from ..contracts import (
     ResearchIntent,
     SubGoal,
 )
+from ..runtime_protocols import FailureKind, ServiceResult
 from .client import (
     LLMError,
     LLMProviderError,
@@ -72,10 +73,7 @@ def role_env(role: str, suffix: str) -> str | None:
 def resolve_provider(role: str) -> str:
     """미설정은 기본값을 사용하고 잘못된 명시값은 즉시 거부한다."""
     role = role.upper()
-    provider = (
-        role_env(role, "PROVIDER")
-        or _DEFAULT_PROVIDER.get(role, "local")
-    ).lower()
+    provider = (role_env(role, "PROVIDER") or _DEFAULT_PROVIDER.get(role, "local")).lower()
     if provider not in VALID_PROVIDERS:
         raise ValueError(
             f"{role}_LLM_PROVIDER={provider!r}는 지원하지 않는다 "
@@ -143,12 +141,14 @@ def parse_goals(
         question = str(item.get("question") or "").strip()
         if not question:
             continue
-        goals.append(SubGoal(
-            goal_id=f"g{start + offset}",
-            question=question,
-            rationale=str(item.get("rationale") or ""),
-            success_criterion=str(item.get("success_criterion") or ""),
-        ))
+        goals.append(
+            SubGoal(
+                goal_id=f"g{start + offset}",
+                question=question,
+                rationale=str(item.get("rationale") or ""),
+                success_criterion=str(item.get("success_criterion") or ""),
+            )
+        )
     return goals
 
 
@@ -177,9 +177,7 @@ def goal_verdict(
         if bucket is None:
             continue
         bucket.append(goal_id)
-        reasons.append(
-            f"{goal_id}: {str(item.get('reason') or '')[:200]}"
-        )
+        reasons.append(f"{goal_id}: {str(item.get('reason') or '')[:200]}")
 
     return {
         "converged": converged,
@@ -190,23 +188,18 @@ def goal_verdict(
 
 
 class RoleService:
-    """역할별 LLM 서비스가 공유하는 failure state."""
+    """역할별 LLM client와 호출별 오류 분류."""
 
     def __init__(self, client: OpenAICompatClient) -> None:
         self.client = client
-        self.last_error: str | None = None
-        self.last_failure_kind: str | None = None
-
-    def _begin(self) -> None:
-        self.last_error = None
-        self.last_failure_kind = None
 
     def _fail(
         self,
         exc: Exception,
         *,
         message: str | None = None,
-    ) -> None:
+    ) -> ServiceResult[Any]:
+        kind: FailureKind
         if isinstance(exc, LLMTransportError):
             kind = "provider_unavailable"
         elif isinstance(exc, LLMProviderError):
@@ -218,14 +211,9 @@ class RoleService:
         else:
             kind = "response_invalid"
 
-        self.last_failure_kind = kind
         if message is None:
-            message = (
-                str(exc)
-                if isinstance(exc, LLMError)
-                else f"{type(exc).__name__}: {exc}"
-            )
-        self.last_error = message[:400]
+            message = str(exc) if isinstance(exc, LLMError) else f"{type(exc).__name__}: {exc}"
+        return ServiceResult(error=message[:400], failure_kind=kind)
 
 
 # 기존 services.py private helper 이름과 호환용 alias.

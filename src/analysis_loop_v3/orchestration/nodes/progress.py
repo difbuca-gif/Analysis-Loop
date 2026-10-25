@@ -152,7 +152,7 @@ async def expand_goals(
         state.get("max_iterations", 25) - state.get("iteration", 0),
     )
     seconds = remaining_seconds(state)
-    new_goals = await deps.planner.expand_goals(
+    result = await deps.planner.expand_goals(
         objective=state.get("objective", ""),
         profile=profile,
         existing_goals=goals,
@@ -164,15 +164,13 @@ async def expand_goals(
         max_expansions=MAX_GOAL_EXPANSIONS,
     )
 
+    new_goals = result.value
     if not new_goals:
-        if getattr(deps.planner, "last_failure_kind", None):
-            reason = getattr(deps.planner, "last_error", None) or "확장 판단 실패"
+        if result.failure_kind:
+            reason = result.error or "확장 판단 실패"
             return unverified(f"{summary()} — 확장 판단 실패: {reason}")
 
-        reason = (
-            getattr(deps.planner, "last_expansion_reason", None)
-            or "추가 분석이 현재 결론을 실질적으로 바꿀 정보 가치를 찾지 못함"
-        )
+        reason = result.reason or "추가 분석이 현재 결론을 실질적으로 바꿀 정보 가치를 찾지 못함"
         _event(
             state,
             deps,
@@ -213,7 +211,7 @@ async def expand_goals(
         "EXPANSION_DECIDED",
         {
             "decision": "expand",
-            "reason": getattr(deps.planner, "last_expansion_reason", None) or "",
+            "reason": result.reason or "",
             "new_goal_ids": [goal.goal_id for goal in new_goals],
             "expansion_round": expansions + 1,
         },

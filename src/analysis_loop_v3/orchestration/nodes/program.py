@@ -66,23 +66,18 @@ async def generate_code(
             "candidate_ref": None,
         }
 
-    previous = [
-        str(error.get("message", error))
-        for error in state.get("validation_errors") or []
-    ]
-    generated = await deps.codegen.generate(
+    previous = [str(error.get("message", error)) for error in state.get("validation_errors") or []]
+    result = await deps.codegen.generate(
         intent=intent,
         profile=profile,
         previous_errors=previous,
         timeout_seconds=DEFAULT_READ_TIMEOUT,
     )
 
+    generated = result.value
     if generated is None:
-        kind = getattr(deps.codegen, "last_failure_kind", None)
-        reason = (
-            getattr(deps.codegen, "last_error", None)
-            or "코드 생성 응답이 없다"
-        )
+        kind = result.failure_kind
+        reason = result.error or "코드 생성 응답이 없다"
         _event(
             state,
             deps,
@@ -95,6 +90,7 @@ async def generate_code(
                 "status": RunStatus.FAILED.value,
                 "stop_code": StopCode.SERVICE_UNAVAILABLE.value,
                 "stop_reason": f"codegen 실패: {reason}",
+                "service_failure": {"role": "codegen", "kind": kind, "message": reason},
                 "program_ref": None,
                 "manifest": None,
                 "candidate_ref": None,
@@ -110,9 +106,7 @@ async def generate_code(
             "static_repairs": state.get("static_repairs", 0) + 1,
         }
 
-    content_key = hashlib.sha256(
-        generated.code.encode("utf-8")
-    ).hexdigest()
+    content_key = hashlib.sha256(generated.code.encode("utf-8")).hexdigest()
     code_ref = deps.artifacts.put_text(
         generated.code,
         kind=ArtifactKind.PROGRAM,

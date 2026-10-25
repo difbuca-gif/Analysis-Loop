@@ -152,4 +152,8 @@ Dataset, 생성 코드, 실행 결과, Figure, Report는 ArtifactStore에 저장
 - Goal 판정은 `planner_decision.py`, 시도 거부는 `review.py`, 진행/종료는 `progress.py`에서 함께 읽는다.
 - 판정 조건과 카운터의 의미는 구현 가까이에 설명한다. `routes.py`의 정적/런타임 재시도 상한은 비교 연산자를 임의로 통일하지 않는다.
 - 보고서 테스트는 `reporting.write_report(..., timeout_seconds=...)`로 시간 제한을 전달한다.
-- 서비스 factory는 역할별 Protocol을 반환한다. 선택적인 실패 정보는 `AgyCodegen`의 동시 호출 특성을 보존하기 위해 기존 조회 방식을 유지한다.
+- 서비스 factory는 역할별 Protocol을 반환한다. 각 서비스 메서드는 `ServiceResult[T]`로 값·오류·실패 종류를 함께 반환한다. `last_error` 같은 호출 간 공유 속성을 사용하지 않는다.
+- Planner의 반환값은 `PlannerProposal.intent`와 `verdict`로 구분한다. 의도 검증 실패에도 목표 판정은 보존할 수 있다.
+- `plan_intent`는 판단 함수를 직접 호출하고 이벤트 기록과 State 조립을 본문에서 수행한다. 회차 초기화 후 목표·Intent·Agenda 변경을 명시적으로 반영한다.
+- `service_failure`는 종료에 필요한 서비스 실패 메타데이터이며 새 회차에서 초기화된다. Critic 장애 후 보고서는 이 State를 읽어 JSON으로 대체한다.
+- 사용자 정의 Planner/Codegen/Critic 구현도 `ServiceResult` 반환 계약을 따라야 한다. 이 호출 결과는 체크포인트의 분석 계약과 별개다.

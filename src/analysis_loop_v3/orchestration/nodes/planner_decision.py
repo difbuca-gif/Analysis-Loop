@@ -6,15 +6,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...contracts import (
+    AgendaTask,
     AnalysisCoverage,
     DatasetProfile,
+    EvidenceRecord,
     LoopIssue,
     ResearchIntent,
     RunStatus,
     StopCode,
     SubGoal,
 )
-from ...state import AnalysisGraphState, current_evidence, pending_agenda_tasks, terminal_update
+from ...state import AnalysisGraphState, pending_agenda_tasks, terminal_update
 from ...validation.checks import validate_intent_references
 from ..failure_policy import service_failure_action
 from ..node_updates import PlanningUpdate
@@ -37,19 +39,24 @@ class PlannerDecision:
 
 
 def goal_progress(
-    state: AnalysisGraphState, goals: list[SubGoal], verdict: dict[str, Any]
+    *,
+    goals: list[SubGoal],
+    verdict: dict[str, Any],
+    evidence: list[EvidenceRecord],
+    rejected_attempts: list[dict[str, Any]],
+    pending_tasks: list[AgendaTask],
 ) -> tuple[list[SubGoal], PlannerDecision]:
     """Intent 생성 여부와 독립적으로 SubGoal 판정을 반영한다."""
     events: list[PolicyEvent] = []
     evidence_by_goal: dict[str, list[str]] = {}
-    for record in current_evidence(state):
+    for record in evidence:
         if record.goal_id:
             evidence_by_goal.setdefault(record.goal_id, []).append(record.evidence_id)
     attempts_by_goal = {goal: len(ids) for goal, ids in evidence_by_goal.items()}
-    for rejected in state.get("rejected") or []:
+    for rejected in rejected_attempts:
         if goal := rejected.get("goal_id"):
             attempts_by_goal[goal] = attempts_by_goal.get(goal, 0) + 1
-    blocked_goal_ids = {item.goal_id for item in pending_agenda_tasks(state) if item.goal_id}
+    blocked_goal_ids = {item.goal_id for item in pending_tasks if item.goal_id}
     updated, changes = apply_goal_verdict(
         goals, verdict, evidence_by_goal, attempts_by_goal, blocked_goal_ids=blocked_goal_ids
     )

@@ -22,6 +22,7 @@ from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...runtime import RuntimeDeps
 from ...state import (
     AnalysisGraphState,
+    current_evidence,
     cycle_reset_update,
     evidence_data_applicability,
     get_agenda,
@@ -44,7 +45,9 @@ from .intent_policy import (
     _repeated_action_error,
     _reuse_evidence_error,
 )
-from .planner_context import _select_planner_findings
+from .planner_context import select_planner_findings
+
+_select_planner_findings = select_planner_findings
 from .planner_decision import NO_INTENT_CODE
 from .planner_decision import apply_goal_verdict as _apply_goal_verdict
 
@@ -98,13 +101,14 @@ async def decompose_objective(
     if deps.planner is None:
         return {}
 
-    goals = await deps.planner.decompose_objective(
+    result = await deps.planner.decompose_objective(
         objective=state.get("objective", ""),
         profile=profile,
         timeout_seconds=DEFAULT_READ_TIMEOUT,
     )
+    goals = result.value
     if not goals:
-        reason = getattr(deps.planner, "last_error", None) or "축을 만들지 못했다"
+        reason = result.error or "축을 만들지 못했다"
         _event(state, deps, "DECOMPOSE_FAILED", {"reason": reason})
         return {}
 
@@ -137,7 +141,7 @@ async def plan_intent(
 
     all_evidence = get_evidence(state)
     goals = get_sub_goals(state)
-    findings, context_reasons = _select_planner_findings(
+    findings, context_reasons = select_planner_findings(
         state,
         goals=goals,
     )
@@ -153,57 +157,77 @@ async def plan_intent(
     )
 
     required_followups = pending_agenda_tasks(state)
-    intent, verdict = await deps.planner.propose_intent(
+    next_iteration = state.get("iteration", 0) + 1
+    remaining_iterations = max(0, state.get("max_iterations", 25) - state.get("iteration", 0))
+    unresolved_findings = [finding for finding in findings if finding.needs_follow_up()]
+    evidence_relations = [
+        relation.model_dump(mode="json") for relation in get_evidence_relations(state)
+    ]
+    rejected_attempts = [
+        {
+            "goal_id": rejected.get("goal_id"),
+            "question": rejected.get("question", ""),
+            "stage": rejected.get("stage"),
+            "reasons": rejected.get("reasons") or [],
+        }
+        for rejected in state.get("rejected") or []
+    ]
+    result = await deps.planner.propose_intent(
         objective=state.get("objective", ""),
         profile=profile,
         sub_goals=goals,
         unexplored=coverage.unexplored(profile),
         column_usage=coverage.column_usage,
         prior_findings=findings,
-        unresolved_findings=[finding for finding in findings if finding.needs_follow_up()],
-        rejected_attempts=[
-            {
-                "goal_id": rejected.get("goal_id"),
-                "question": rejected.get("question", ""),
-                "stage": rejected.get("stage"),
-                "reasons": rejected.get("reasons") or [],
-            }
-            for rejected in state.get("rejected") or []
-        ],
+        unresolved_findings=unresolved_findings,
+        rejected_attempts=rejected_attempts,
         previous_generation_error=state.get("last_planner_error"),
         required_followups=required_followups,
         recent_inspection=state.get("inspection_summary"),
         recent_evidence_lookup=state.get("evidence_lookup_summary") or [],
-        evidence_relations=[
-            relation.model_dump(mode="json") for relation in get_evidence_relations(state)
-        ],
+        evidence_relations=evidence_relations,
         remaining_seconds=max(0.0, remaining_seconds(state)),
-        remaining_iterations=max(
-            0,
-            int(state.get("max_iterations", 25)) - int(state.get("iteration", 0)),
-        ),
+        remaining_iterations=remaining_iterations,
         timeout_seconds=DEFAULT_READ_TIMEOUT,
     )
 
-    updated_goals, goal_update = _goal_progress(
-        state,
-        deps,
-        goals,
-        verdict,
+    proposal = result.value
+    intent = proposal.intent if proposal is not None else None
+    verdict = proposal.verdict if proposal is not None else {}
+    updated_goals, goal_decision = decisions.goal_progress(
+        goals=goals,
+        verdict=verdict,
+        evidence=current_evidence(state),
+        rejected_attempts=state.get("rejected") or [],
+        pending_tasks=required_followups,
     )
+    for event in goal_decision.events:
+        _event(state, deps, event.name, event.payload)
+    goal_update = goal_decision.update
+    assert goal_update is not None
 
     if intent is None:
-        return _no_intent(
+        decision = decisions.no_intent(
             state,
-            deps,
             verdict=verdict,
             updated_goals=updated_goals,
             goal_update=goal_update,
+            failure_reason=result.error,
+            failure_kind=result.failure_kind,
         )
+        for event in decision.events:
+            _event(state, deps, event.name, event.payload)
+        assert decision.update is not None
+        if decision.update.get("stop_code") == StopCode.SERVICE_UNAVAILABLE.value:
+            decision.update["service_failure"] = {
+                "role": "planner",
+                "kind": result.failure_kind,
+                "message": result.error or "planner 실패",
+            }
+        return decision.update
 
-    rejection = _rejected_intent(
+    decision = decisions.rejected_intent(
         state,
-        deps,
         intent,
         profile=profile,
         goals=goals,
@@ -212,8 +236,10 @@ async def plan_intent(
         updated_goals=updated_goals,
         goal_update=goal_update,
     )
-    if rejection is not None:
-        return rejection
+    for event in decision.events:
+        _event(state, deps, event.name, event.payload)
+    if decision.update is not None:
+        return decision.update
 
     _event(
         state,
@@ -229,7 +255,7 @@ async def plan_intent(
             "execution_mode": intent.execution_mode,
             "success_criterion": intent.success_criterion,
         },
-        iteration=state.get("iteration", 0) + 1,
+        iteration=next_iteration,
     )
 
     agenda_update: list[dict[str, Any]] | None = None
@@ -257,14 +283,15 @@ async def plan_intent(
             },
         )
 
-    return {
-        **goal_update,
-        **({"agenda": agenda_update} if agenda_update is not None else {}),
-        **({"evidence_lookup_summary": []} if intent.execution_mode != "lookup_evidence" else {}),
-        "intent": intent.model_dump(mode="json"),
-        "iteration": state.get("iteration", 0) + 1,
-        **cycle_reset_update(),
-    }
+    update: PlanningUpdate = {**cycle_reset_update()}
+    update.update(goal_update)
+    update["intent"] = intent.model_dump(mode="json")
+    update["iteration"] = next_iteration
+    if agenda_update is not None:
+        update["agenda"] = agenda_update
+    if intent.execution_mode != "lookup_evidence":
+        update["evidence_lookup_summary"] = []
+    return update
 
 
 async def reuse_evidence(
@@ -387,7 +414,13 @@ def _goal_progress(
     goals: list[SubGoal],
     verdict: dict[str, Any],
 ) -> tuple[list[SubGoal], PlanningUpdate]:
-    updated, decision = decisions.goal_progress(state, goals, verdict)
+    updated, decision = decisions.goal_progress(
+        goals=goals,
+        verdict=verdict,
+        evidence=current_evidence(state),
+        rejected_attempts=state.get("rejected") or [],
+        pending_tasks=pending_agenda_tasks(state),
+    )
     update = _record_decision(state, deps, decision)
     assert update is not None
     return updated, update
@@ -400,11 +433,13 @@ def _no_intent(
     verdict: dict[str, Any],
     updated_goals: list[SubGoal],
     goal_update: PlanningUpdate,
+    failure_reason: str | None = None,
+    failure_kind: str | None = None,
 ) -> PlanningUpdate:
     decision = decisions.no_intent(
         state,
-        failure_reason=getattr(deps.planner, "last_error", None),
-        failure_kind=getattr(deps.planner, "last_failure_kind", None),
+        failure_reason=failure_reason,
+        failure_kind=failure_kind,
         verdict=verdict,
         updated_goals=updated_goals,
         goal_update=goal_update,

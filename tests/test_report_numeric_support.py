@@ -16,6 +16,7 @@ from analysis_loop_v3.orchestration.nodes.reporting import run_summary, write_re
 from analysis_loop_v3.orchestration.nodes.result_validation import validate_result
 from analysis_loop_v3.orchestration.nodes.review import commit_evidence, critique
 from analysis_loop_v3.report_validation import validate_report
+from analysis_loop_v3.runtime_protocols import ServiceResult
 
 
 def report(number, evidence_id="e1"):
@@ -135,7 +136,7 @@ def test_bad_report_falls_back_to_json(harness):
     state.update(asyncio.run(critique(state, deps)))
     state.update(asyncio.run(commit_evidence(state, deps)))
     evidence_id = state["evidence"][0]["evidence_id"]
-    deps.critic.generate_report.return_value = report("999", evidence_id)
+    deps.critic.generate_report.return_value = ServiceResult(value=report("999", evidence_id))
     ref, accepted = asyncio.run(write_report(state, deps, run_summary(state)))
     assert not accepted
     assert ref.path.endswith(".json")
@@ -147,7 +148,7 @@ def test_missing_result_artifact_rejects_numeric_report(harness):
     state.update(asyncio.run(critique(state, deps)))
     state.update(asyncio.run(commit_evidence(state, deps)))
     evidence_id = state["evidence"][0]["evidence_id"]
-    deps.critic.generate_report.return_value = report("1.25", evidence_id)
+    deps.critic.generate_report.return_value = ServiceResult(value=report("1.25", evidence_id))
     Path(state["candidate_ref"]["path"]).unlink()
     _, accepted = asyncio.run(write_report(state, deps, run_summary(state)))
     assert not accepted
@@ -175,7 +176,9 @@ def test_calculation_to_evidence_to_report(harness, tmp_path):
     state.update(asyncio.run(commit_evidence(state, deps)))
     evidence = state["evidence"][0]
     assert evidence["effect_summary"][0]["value"] == 1.25
-    deps.critic.generate_report.return_value = report("1.25", evidence["evidence_id"])
+    deps.critic.generate_report.return_value = ServiceResult(
+        value=report("1.25", evidence["evidence_id"])
+    )
     ref, accepted = asyncio.run(write_report(state, deps, run_summary(state)))
     assert accepted
     assert ref.path.endswith(".md")

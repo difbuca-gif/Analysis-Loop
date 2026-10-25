@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Generic, Literal, Protocol, TypedDict, TypeVar
 
 from .contracts import (
     AgendaTask,
@@ -14,6 +14,31 @@ from .contracts import (
     ResearchIntent,
     SubGoal,
 )
+
+_ValueT = TypeVar("_ValueT")
+FailureKind = Literal["provider_unavailable", "configuration", "contract", "response_invalid"]
+
+
+@dataclass(frozen=True)
+class ServiceResult(Generic[_ValueT]):
+    """한 호출의 값과 실패 정보를 함께 반환한다. 서비스 인스턴스에 실패 상태를 남기지 않는다."""
+
+    value: _ValueT | None = None
+    error: str | None = None
+    failure_kind: FailureKind | None = None
+    reason: str | None = None  # 정상적인 확장 중단/확장 선택 이유
+
+
+@dataclass(frozen=True)
+class PlannerProposal:
+    intent: ResearchIntent | None = None
+    verdict: dict[str, Any] = field(default_factory=dict)
+
+
+class ServiceFailure(TypedDict):
+    role: Literal["planner", "codegen", "critic"]
+    kind: FailureKind | None
+    message: str
 
 
 class PlannerService(Protocol):
@@ -38,7 +63,7 @@ class PlannerService(Protocol):
         remaining_iterations: int | None = None,
         rejected_attempts: list[dict[str, Any]] | None = None,
         previous_generation_error: str | None = None,
-    ) -> tuple[ResearchIntent | None, dict[str, Any]]: ...
+    ) -> ServiceResult[PlannerProposal]: ...
 
     async def decompose_objective(
         self,
@@ -46,7 +71,7 @@ class PlannerService(Protocol):
         objective: str,
         profile: DatasetProfile,
         timeout_seconds: float,
-    ) -> list[SubGoal]: ...
+    ) -> ServiceResult[list[SubGoal]]: ...
 
     async def expand_goals(
         self,
@@ -60,7 +85,7 @@ class PlannerService(Protocol):
         remaining_iterations: int,
         expansion_round: int,
         max_expansions: int,
-    ) -> list[SubGoal]: ...
+    ) -> ServiceResult[list[SubGoal]]: ...
 
 
 class CodegenService(Protocol):
@@ -73,7 +98,7 @@ class CodegenService(Protocol):
         profile: DatasetProfile,
         previous_errors: list[str],
         timeout_seconds: float,
-    ) -> GeneratedAnalysis | None: ...
+    ) -> ServiceResult[GeneratedAnalysis]: ...
 
 
 class CriticService(Protocol):
@@ -88,7 +113,7 @@ class CriticService(Protocol):
         timeout_seconds: float,
         prior_findings: list[FindingDigest] | None = None,
         validation_warnings: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any] | None: ...
+    ) -> ServiceResult[dict[str, Any]]: ...
 
     async def generate_report(
         self,
@@ -97,7 +122,7 @@ class CriticService(Protocol):
         evidence: list[dict[str, Any]],
         rejected: list[dict[str, Any]],
         timeout_seconds: float,
-    ) -> str | None: ...
+    ) -> ServiceResult[str]: ...
 
     async def review_report(
         self,
@@ -108,7 +133,7 @@ class CriticService(Protocol):
         results: dict[str, Any],
         dataset_profile: dict[str, Any] | None,
         timeout_seconds: float,
-    ) -> dict[str, Any] | None: ...
+    ) -> ServiceResult[dict[str, Any]]: ...
 
 
 @dataclass(slots=True)

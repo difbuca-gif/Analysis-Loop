@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from ..runtime_protocols import ServiceFailure
+
 
 class TerminalUpdate(TypedDict, total=False):
     status: str
@@ -17,6 +19,7 @@ class TerminalUpdate(TypedDict, total=False):
 
 
 class CycleResetUpdate(TypedDict, total=False):
+    service_failure: ServiceFailure | None
     last_planner_error: str | None
     program_ref: dict[str, Any] | None
     manifest: dict[str, Any] | None
@@ -48,6 +51,7 @@ class ProgramLookupUpdate(TypedDict, total=False):
 
 
 class CodegenUpdate(ProgramLookupUpdate, total=False):
+    service_failure: ServiceFailure
     candidate_ref: dict[str, Any] | None
     validation_warnings: list[dict[str, Any]]
     error_streak: dict[str, Any]
@@ -71,6 +75,7 @@ class ExecutionUpdate(ValidationUpdate, total=False):
 
 
 class CritiqueUpdate(TerminalUpdate, total=False):
+    service_failure: ServiceFailure
     review: dict[str, Any]
 
 

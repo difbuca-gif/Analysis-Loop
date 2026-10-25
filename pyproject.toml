@@ -92,6 +92,12 @@ check_untyped_defs = true
 disallow_untyped_defs = true
 warn_return_any = true
 files = [
+    "src/analysis_loop_v3/runtime_protocols.py",
+    "src/analysis_loop_v3/llm/service_common.py",
+    "src/analysis_loop_v3/llm/planner_service.py",
+    "src/analysis_loop_v3/llm/codegen_service.py",
+    "src/analysis_loop_v3/llm/critic_service.py",
+    "src/analysis_loop_v3/llm/agy_codegen.py",
     "src/analysis_loop_v3/llm/services.py",
     "src/analysis_loop_v3/orchestration/node_updates.py",
     "src/analysis_loop_v3/orchestration/failure_policy.py",

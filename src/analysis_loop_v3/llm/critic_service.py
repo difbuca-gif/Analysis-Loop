@@ -13,6 +13,7 @@ from ..contracts import (
     ReportSemanticReview,
     ResearchIntent,
 )
+from ..runtime_protocols import ServiceResult
 from .service_common import (
     LLMCriticReview,
     RoleService,
@@ -31,7 +32,7 @@ class LLMCritic(RoleService):
         timeout_seconds: float,
         prior_findings: list[FindingDigest] | None = None,
         validation_warnings: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> ServiceResult[dict[str, Any]]:
         payload: dict[str, Any] = {
             "연구 의도": intent.model_dump(mode="json", exclude={"intent_id"}),
             "선언한 분석": manifest.manifest_without_code(),
@@ -49,8 +50,7 @@ class LLMCritic(RoleService):
                     "transform_signature": finding.transform_signature,
                     "data_applicability": finding.data_applicability,
                     "effect_summary": [
-                        effect.model_dump(mode="json")
-                        for effect in finding.effect_summary
+                        effect.model_dump(mode="json") for effect in finding.effect_summary
                     ],
                     "uncertainty_summary": finding.uncertainty_summary,
                     "confidence": finding.confidence,
@@ -68,7 +68,6 @@ class LLMCritic(RoleService):
                 for item in validation_warnings
             ]
 
-        self._begin()
         try:
             raw = await self.client.generate_json(
                 prompt=dumps(payload),
@@ -77,21 +76,17 @@ class LLMCritic(RoleService):
                 role="critic_review",
             )
         except Exception as exc:
-            self._fail(exc)
-            return None
+            return self._fail(exc)
 
         try:
             boundary = LLMCriticReview.model_validate(raw)
-            review = CriticReview.model_validate(
-                boundary.model_dump(mode="python")
-            )
+            review = CriticReview.model_validate(boundary.model_dump(mode="python"))
         except ValidationError as exc:
-            self._fail(
+            return self._fail(
                 exc,
                 message=f"critic 응답 계약 위반: {exc}",
             )
-            return None
-        return review.model_dump(mode="json")
+        return ServiceResult(value=review.model_dump(mode="json"))
 
     async def generate_report(
         self,
@@ -100,7 +95,7 @@ class LLMCritic(RoleService):
         evidence: list[dict[str, Any]],
         rejected: list[dict[str, Any]],
         timeout_seconds: float,
-    ) -> str | None:
+    ) -> ServiceResult[str]:
         payload = {
             "실행 요약": {
                 key: run_summary.get(key)
@@ -152,16 +147,17 @@ class LLMCritic(RoleService):
             ],
         }
         try:
-            return await self.client.generate_text(
+            markdown = await self.client.generate_text(
                 prompt=dumps(payload),
                 system=load_prompt("report_system"),
                 timeout_seconds=timeout_seconds,
                 role="report",
             )
+            return ServiceResult(value=markdown)
         except Exception as exc:
-            self.last_failure_kind = "response_invalid"
-            self.last_error = f"{type(exc).__name__}: {exc}"[:400]
-            return None
+            return ServiceResult(
+                error=f"{type(exc).__name__}: {exc}"[:400], failure_kind="response_invalid"
+            )
 
     async def review_report(
         self,
@@ -172,7 +168,7 @@ class LLMCritic(RoleService):
         results: dict[str, Any],
         dataset_profile: dict[str, Any] | None,
         timeout_seconds: float,
-    ) -> dict[str, Any] | None:
+    ) -> ServiceResult[dict[str, Any]]:
         """완성된 보고서를 별도 요청으로 의미 검토한다."""
         payload = {
             "검토할 보고서": markdown,
@@ -212,7 +208,6 @@ class LLMCritic(RoleService):
             ],
             "인용 근거의 원본 결과": results,
         }
-        self._begin()
         try:
             raw = await self.client.generate_json(
                 prompt=dumps(payload),
@@ -220,12 +215,11 @@ class LLMCritic(RoleService):
                 timeout_seconds=timeout_seconds,
                 role="report_review",
             )
-            return ReportSemanticReview.model_validate(raw).model_dump(mode="json")
-        except Exception as exc:
-            self._fail(
-                exc,
-                message=(
-                    f"보고서 의미 검토 실패: {type(exc).__name__}: {exc}"[:400]
-                ),
+            return ServiceResult(
+                value=ReportSemanticReview.model_validate(raw).model_dump(mode="json")
             )
-            return None
+        except Exception as exc:
+            return self._fail(
+                exc,
+                message=(f"보고서 의미 검토 실패: {type(exc).__name__}: {exc}"[:400]),
+            )
