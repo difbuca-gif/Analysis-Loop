@@ -1,5 +1,12 @@
 """유지보수 리팩터링이 기존 import surface를 깨지 않는지 확인한다."""
 
+from analysis_loop_v3.llm.services import (
+    LLMCritic,
+    LLMCodegen,
+    LLMPlanner,
+    build_services,
+    resolve_provider,
+)
 from analysis_loop_v3.orchestration.graph import (
     route_after_critique,
     route_after_execute,
@@ -14,6 +21,13 @@ from analysis_loop_v3.runtime import (
     ArtifactStore,
     RuntimeDeps,
     SandboxResult,
+)
+from analysis_loop_v3.validation.checks import (
+    check_code_matches_manifest,
+    check_manifest,
+    check_result,
+    validate_critic_references,
+    validate_intent_references,
 )
 
 
@@ -36,3 +50,19 @@ def test_runtime_compatibility_exports_remain_available():
     assert ArtifactStore is not None
     assert RuntimeDeps is not None
     assert SandboxResult is not None
+
+
+def test_llm_services_compatibility_exports_remain_available():
+    assert LLMPlanner is not None
+    assert LLMCodegen is not None
+    assert LLMCritic is not None
+    assert callable(build_services)
+    assert callable(resolve_provider)
+
+
+def test_validation_checks_facade_remains_available():
+    assert callable(validate_intent_references)
+    assert callable(validate_critic_references)
+    assert callable(check_manifest)
+    assert callable(check_code_matches_manifest)
+    assert callable(check_result)
