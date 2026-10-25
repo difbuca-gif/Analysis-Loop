@@ -117,4 +117,15 @@ __all__ = [
     "build_role_client",
     "build_services",
     "describe_services",
+    # 기존 private helper import도 refactor 기간에는 유지한다.
+    "_LLMResearchIntent",
+    "_LLMGeneratedAnalysis",
+    "_LLMCriticReview",
+    "_RoleService",
+    "_role_env",
+    "_profile_digest",
+    "_dumps",
+    "_parse_goals",
+    "_goal_verdict",
+    "_same_endpoint_model",
 ]
