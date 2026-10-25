@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ...runtime import RuntimeDeps
 from ...state import AnalysisGraphState, get_intent, get_profile, get_ref
 from ...validation.checks import check_result
+from ..node_updates import ValidationUpdate
 from ._shared import _event, _load_generated, bump_error_streak
 
 
 async def validate_result(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> ValidationUpdate:
     """Result Artifact가 생성 분석 계약을 지키는지 검사."""
     intent = get_intent(state)
     ref = get_ref(state, "candidate_ref")
