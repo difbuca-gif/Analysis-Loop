@@ -32,6 +32,7 @@ from .orchestration.nodes import finalize
 from .runtime import RuntimeDeps
 from .state import new_state, remaining_seconds, terminal_update
 
+
 @dataclass(slots=True)
 class RunHandle:
     run_id: str
@@ -39,11 +40,13 @@ class RunHandle:
     status: str
     state: dict[str, Any]
 
+
 def _thread_config(thread_id: str) -> dict[str, Any]:
     return {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": RECURSION_LIMIT,
     }
+
 
 @contextlib.asynccontextmanager
 async def open_checkpointer(db_path: Path | str) -> AsyncIterator[Any]:
@@ -54,6 +57,7 @@ async def open_checkpointer(db_path: Path | str) -> AsyncIterator[Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
         yield saver
+
 
 class AnalysisService:
     def __init__(self, deps: RuntimeDeps, checkpointer: Any) -> None:
