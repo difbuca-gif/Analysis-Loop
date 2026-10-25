@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
+from typing import Any
 
 from ...contracts import ArtifactKind, ArtifactRef, InvalidRunId, validate_run_id
 from ...runtime import RuntimeDeps
@@ -123,7 +124,7 @@ async def execute(
 
     assert result.result_path is not None
 
-    figure_refs: list[dict[str, object]] = []
+    figure_refs: list[dict[str, Any]] = []
     if workdir.exists():
         for path in workdir.glob("*.png"):
             fig_ref = deps.artifacts.put_bytes(
