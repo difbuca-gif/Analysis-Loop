@@ -8,11 +8,11 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
-from typing import Any
 
 from ...contracts import ArtifactKind, ArtifactRef, InvalidRunId, validate_run_id
 from ...runtime import RuntimeDeps
 from ...state import AnalysisGraphState, get_ref, remaining_seconds
+from ..node_updates import ExecutionUpdate
 from ._shared import _event, bump_error_streak
 from .result_validation import validate_result
 
@@ -53,7 +53,7 @@ def _run_workdir(root: Path, run_id: str, iteration: int) -> Path:
 async def execute(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> ExecutionUpdate:
     """생성 코드를 Sandbox에서 실행하고 결과 참조를 State에 남긴다."""
     dataset = get_ref(state, "dataset_ref")
     program = get_ref(state, "program_ref")
@@ -123,7 +123,7 @@ async def execute(
 
     assert result.result_path is not None
 
-    figure_refs = []
+    figure_refs: list[dict[str, object]] = []
     if workdir.exists():
         for path in workdir.glob("*.png"):
             fig_ref = deps.artifacts.put_bytes(
