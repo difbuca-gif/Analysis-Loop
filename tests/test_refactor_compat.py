@@ -2,6 +2,19 @@
 
 from types import SimpleNamespace
 
+from analysis_loop_v3.contracts import (
+    AgendaTask,
+    AnalysisProtocol,
+    ArtifactRef,
+    CriticReview,
+    DatasetProfile,
+    EvidenceRecord,
+    GeneratedAnalysis,
+    ResearchIntent,
+    RunStatus,
+    StopCode,
+    ValidationReport,
+)
 from analysis_loop_v3.llm.services import (
     LLMCritic,
     LLMCodegen,
@@ -54,6 +67,23 @@ def test_runtime_compatibility_exports_remain_available():
     assert ArtifactStore is not None
     assert RuntimeDeps is not None
     assert SandboxResult is not None
+
+
+def test_contract_facade_exports_core_models():
+    expected = (
+        ArtifactRef,
+        DatasetProfile,
+        ResearchIntent,
+        AnalysisProtocol,
+        GeneratedAnalysis,
+        ValidationReport,
+        EvidenceRecord,
+        AgendaTask,
+        CriticReview,
+        RunStatus,
+        StopCode,
+    )
+    assert all(model is not None for model in expected)
 
 
 def test_llm_services_compatibility_exports_remain_available():
