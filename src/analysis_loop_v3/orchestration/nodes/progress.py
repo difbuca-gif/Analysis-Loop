@@ -1,6 +1,7 @@
 """분석 진행 여부와 Goal 확장 판단.
 
 종료 정책은 progress_policy.py, 보고서 생성은 reporting.py에 분리한다.
+기존 private helper import 경로는 compatibility alias로 유지한다.
 """
 
 from __future__ import annotations
@@ -27,7 +28,13 @@ from .progress_policy import (
     _repair_contradiction_agenda,
     _terminal_after_expansion,
 )
-from .reporting import finalize
+from .reporting import (
+    _reportable_evidence,
+    _review_report,
+    _run_summary,
+    _write_report,
+    finalize,
+)
 
 
 async def assess_progress(
@@ -206,4 +213,10 @@ __all__ = [
     "assess_progress",
     "expand_goals",
     "finalize",
+    "_repair_contradiction_agenda",
+    "_terminal_after_expansion",
+    "_reportable_evidence",
+    "_run_summary",
+    "_review_report",
+    "_write_report",
 ]
