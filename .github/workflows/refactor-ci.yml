@@ -1,7 +1,6 @@
 name: Refactor CI
 
 # Branch-only safety net for the maintainability refactor. Do not merge automatically.
-# Trigger revision: contracts/llm/validation split included.
 on:
   push:
     branches:
@@ -36,7 +35,31 @@ jobs:
         run: python -m compileall -q src tests
 
       - name: Lint
-        run: ruff check src tests
+        id: lint
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          ruff check src tests 2>&1 | tee ruff.txt
 
       - name: Test
-        run: pytest -q
+        id: tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q 2>&1 | tee pytest.txt
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: refactor-diagnostics
+          path: |
+            ruff.txt
+            pytest.txt
+          if-no-files-found: warn
+
+      - name: Fail on checks
+        if: steps.lint.outcome != 'success' || steps.tests.outcome != 'success'
+        run: exit 1
