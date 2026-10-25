@@ -93,6 +93,7 @@ async def review_report(
     evidence: list[EvidenceRecord],
     cited_ids: set[str],
     results: dict[str, Any],
+    timeout_seconds: float = DEFAULT_READ_TIMEOUT,
 ) -> dict[str, Any]:
     """구조·수치 검사를 통과한 초안만 의미 검토한다."""
     outcome: dict[str, Any] = {
@@ -122,9 +123,9 @@ async def review_report(
                     dataset_profile=(
                         profile.model_dump(mode="json") if profile else None
                     ),
-                    timeout_seconds=DEFAULT_READ_TIMEOUT,
+                    timeout_seconds=timeout_seconds,
                 ),
-                timeout=DEFAULT_READ_TIMEOUT,
+                timeout=timeout_seconds,
             )
             if raw is None:
                 reason = getattr(deps.critic, "last_error", None) or "응답이 없다"
@@ -168,6 +169,8 @@ async def write_report(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
     summary: dict[str, Any],
+    *,
+    timeout_seconds: float = DEFAULT_READ_TIMEOUT,
 ) -> tuple[Any, bool]:
     """검증된 Markdown을 채택하고 실패하면 구조화 JSON으로 fallback한다."""
     all_evidence = get_evidence(state)
@@ -193,7 +196,7 @@ async def write_report(
             run_summary=summary,
             evidence=[item.model_dump(mode="json") for item in reportable],
             rejected=state.get("rejected") or [],
-            timeout_seconds=DEFAULT_READ_TIMEOUT,
+            timeout_seconds=timeout_seconds,
         )
 
     if report_md:
@@ -226,6 +229,7 @@ async def write_report(
                 evidence=reportable,
                 cited_ids=set(validation["cited_evidence_ids"]),
                 results=original_results,
+                timeout_seconds=timeout_seconds,
             )
             if semantic["passed"]:
                 ref = deps.artifacts.put_text(
@@ -252,10 +256,20 @@ async def write_report(
     return ref, False
 
 
-async def finalize(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, Any]:
+async def finalize(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    *,
+    timeout_seconds: float = DEFAULT_READ_TIMEOUT,
+) -> dict[str, Any]:
     """최종 보고서 Artifact와 종료 메타데이터를 만든다."""
     summary = run_summary(state)
-    ref, is_markdown = await write_report(state, deps, summary)
+    ref, is_markdown = await write_report(
+        state,
+        deps,
+        summary,
+        timeout_seconds=timeout_seconds,
+    )
 
     _event(state, deps, "FINALIZED", {
         "evidence_count": summary["evidence_count"],
