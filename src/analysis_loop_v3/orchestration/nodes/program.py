@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
 
 from ...contracts import ArtifactKind, RunStatus, StopCode
 from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...runtime import RuntimeDeps
 from ...state import AnalysisGraphState, get_intent, get_profile
+from ..failure_policy import is_terminal_service_failure
+from ..node_updates import CodegenUpdate, ProgramLookupUpdate
 from ._shared import _event, bump_error_streak
 from .code_validation import validate_code
 
@@ -19,7 +20,7 @@ from .code_validation import validate_code
 async def lookup_program(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> ProgramLookupUpdate:
     """동일 schema/Intent의 검증 프로그램을 생성 호출 전에 재사용."""
     intent = get_intent(state)
     profile = get_profile(state)
@@ -49,7 +50,7 @@ async def lookup_program(
 async def generate_code(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> CodegenUpdate:
     """Codegen 결과를 Artifact로 저장하고 Manifest만 State에 남긴다."""
     intent = get_intent(state)
     profile = get_profile(state)
@@ -89,7 +90,7 @@ async def generate_code(
             {"reason": reason, "kind": kind},
         )
 
-        if kind in {"provider_unavailable", "configuration"}:
+        if is_terminal_service_failure(kind):
             return {
                 "status": RunStatus.FAILED.value,
                 "stop_code": StopCode.SERVICE_UNAVAILABLE.value,
