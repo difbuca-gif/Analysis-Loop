@@ -62,11 +62,23 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.ruff.lint.per-file-ignores]
-# LLM 경계의 공급자/파서 오류를 상태로 변환한다.
+# LLM 경계는 provider/transport/parser 예외를 역할 실패 상태로 변환한다.
 "src/analysis_loop_v3/llm/client.py" = ["BLE001", "S110"]
-"src/analysis_loop_v3/llm/services.py" = ["BLE001"]
+"src/analysis_loop_v3/llm/services.py" = ["BLE001", "RUF022"]
+"src/analysis_loop_v3/llm/planner_service.py" = ["BLE001"]
+"src/analysis_loop_v3/llm/codegen_service.py" = ["BLE001"]
+"src/analysis_loop_v3/llm/critic_service.py" = ["BLE001"]
 # subprocess에 전달한 임시 파일을 명시적으로 정리한다.
 "src/analysis_loop_v3/llm/agy_codegen.py" = ["SIM115", "UP041"]
+# 공개 심볼은 알파벳보다 실행/도메인 순서를 유지한다.
+"src/analysis_loop_v3/api/app.py" = ["RUF022"]
+"src/analysis_loop_v3/contracts.py" = ["RUF022"]
+"src/analysis_loop_v3/orchestration/routes.py" = ["RUF022"]
+"src/analysis_loop_v3/orchestration/nodes/__init__.py" = ["RUF022"]
+"src/analysis_loop_v3/orchestration/nodes/planning.py" = ["RUF022"]
+"src/analysis_loop_v3/orchestration/nodes/program.py" = ["RUF022"]
+"src/analysis_loop_v3/orchestration/nodes/progress.py" = ["RUF022"]
+"src/analysis_loop_v3/runtime.py" = ["RUF022"]
+"src/analysis_loop_v3/validation/checks.py" = ["RUF022"]
 # FastAPI 의존성 선언과 공개 심볼 순서를 보존한다.
 "src/analysis_loop_v3/worker/app.py" = ["B008"]
-"src/analysis_loop_v3/orchestration/nodes/__init__.py" = ["RUF022"]
