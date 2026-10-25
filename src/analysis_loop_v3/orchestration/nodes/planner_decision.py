@@ -17,7 +17,6 @@ from ...runtime import RuntimeDeps
 from ...state import (
     AnalysisGraphState,
     current_evidence,
-    get_evidence,
     pending_agenda_tasks,
     terminal_update,
 )
