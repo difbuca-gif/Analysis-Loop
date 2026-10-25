@@ -35,4 +35,11 @@ __all__ = [
     "extract_referenced_columns",
     "check_code_matches_manifest",
     "check_result",
+    # 기존 private/helper import surface 유지.
+    "issue",
+    "_issue",
+    "schema_type_of",
+    "_schema_type_of",
+    "non_finite_numbers",
+    "_non_finite_numbers",
 ]
