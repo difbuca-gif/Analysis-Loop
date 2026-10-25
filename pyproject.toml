@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff>=0.5", "pytest>=8"]
+dev = ["ruff>=0.5", "pytest>=8", "mypy>=1.11"]
 postgres = [
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",
@@ -82,3 +82,27 @@ pythonpath = ["src"]
 "src/analysis_loop_v3/validation/checks.py" = ["RUF022"]
 # FastAPI 의존성 선언과 공개 심볼 순서를 보존한다.
 "src/analysis_loop_v3/worker/app.py" = ["B008"]
+
+# Start with the refactored orchestration boundaries; expand coverage as other modules are typed.
+[tool.mypy]
+python_version = "3.12"
+follow_imports = "silent"
+ignore_missing_imports = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_return_any = true
+files = [
+    "src/analysis_loop_v3/orchestration/node_updates.py",
+    "src/analysis_loop_v3/orchestration/failure_policy.py",
+    "src/analysis_loop_v3/orchestration/routes.py",
+    "src/analysis_loop_v3/orchestration/nodes/planning.py",
+    "src/analysis_loop_v3/orchestration/nodes/planner_decision.py",
+    "src/analysis_loop_v3/orchestration/nodes/progress.py",
+    "src/analysis_loop_v3/orchestration/nodes/progress_policy.py",
+    "src/analysis_loop_v3/orchestration/nodes/reporting.py",
+    "src/analysis_loop_v3/orchestration/nodes/review.py",
+    "src/analysis_loop_v3/orchestration/nodes/program.py",
+    "src/analysis_loop_v3/orchestration/nodes/code_validation.py",
+    "src/analysis_loop_v3/orchestration/nodes/result_validation.py",
+    "src/analysis_loop_v3/orchestration/nodes/running.py",
+]

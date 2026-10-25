@@ -99,7 +99,9 @@ def route_after_validate_result(
 
 def route_after_critique(
     state: AnalysisGraphState,
-) -> Literal["commit_evidence", "reject_attempt"]:
+) -> Literal["commit_evidence", "reject_attempt", "finalize"]:
+    if state.get("status") in {RunStatus.COMPLETED.value, RunStatus.FAILED.value}:
+        return "finalize"
     review = state.get("review") or {}
     verdict = review.get("verdict")
     claim = str(review.get("claim") or "").strip()

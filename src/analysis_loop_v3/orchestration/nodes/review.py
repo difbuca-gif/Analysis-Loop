@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...contracts import CriticReview, FindingDigest
+from ...contracts import CriticReview, FindingDigest, RunStatus, StopCode
 from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...runtime import RuntimeDeps
 from ...state import (
@@ -20,9 +20,11 @@ from ...state import (
     get_intent,
     get_profile,
     get_ref,
+    terminal_update,
 )
 from ...validation.checks import validate_critic_references
 from ...validation.numeric import bind_review_to_result
+from ..failure_policy import service_failure_action
 from ..node_updates import CritiqueUpdate, EvidenceCommitUpdate, RejectionUpdate
 from ._shared import _event, _load_generated
 from .rejection_policy import _rejection_reasons, _stuck_issue
@@ -42,7 +44,14 @@ async def critique(
     """결정론적 검증을 통과한 결과만 Critic에게 의미 검토를 요청한다."""
     if deps.critic is None:
         _event(state, deps, "CRITIC_UNAVAILABLE")
-        return {"review": {"verdict": "unreviewed", "reasons": ["critic LLM 없음"]}}
+        return {
+            "review": {"verdict": "unreviewed", "reasons": ["critic LLM 없음"]},
+            **terminal_update(
+                status=RunStatus.FAILED,
+                stop_code=StopCode.SERVICE_UNAVAILABLE,
+                reason="critic LLM이 없다",
+            ),
+        }
 
     intent = get_intent(state)
     ref = get_ref(state, "candidate_ref")
@@ -55,16 +64,25 @@ async def critique(
         manifest=generated,
         result_summary=payload if isinstance(payload, dict) else {"value": payload},
         timeout_seconds=DEFAULT_READ_TIMEOUT,
-        prior_findings=[
-            FindingDigest.from_evidence(e)
-            for e in active_evidence(state)
-        ],
+        prior_findings=[FindingDigest.from_evidence(e) for e in active_evidence(state)],
         validation_warnings=state.get("validation_warnings", []),
     )
     if review is None:
         reason = getattr(deps.critic, "last_error", None) or "이유 불명"
         _event(state, deps, "CRITIC_FAILED", {"reason": reason})
-        return {"review": {"verdict": "unreviewed", "reasons": ["critic 호출 실패"]}}
+        update: CritiqueUpdate = {
+            "review": {"verdict": "unreviewed", "reasons": ["critic 호출 실패"]},
+        }
+        kind = getattr(deps.critic, "last_failure_kind", None)
+        if service_failure_action(kind) == "stop_run":
+            update.update(
+                terminal_update(
+                    status=RunStatus.FAILED,
+                    stop_code=StopCode.SERVICE_UNAVAILABLE,
+                    reason=f"critic 실패: {reason}",
+                )
+            )
+        return update
 
     try:
         parsed = CriticReview.model_validate(review)
@@ -88,19 +106,24 @@ async def critique(
             }
         }
 
-    _event(state, deps, "CRITIQUED", {
-        "intent_id": intent.intent_id,
-        "verdict": parsed.verdict,
-        "confidence": parsed.confidence,
-        "open_questions": parsed.open_questions,
-        "contradicts": parsed.contradicts,
-        "revalidates": parsed.revalidates,
-        "revalidation_required": parsed.revalidation_required,
-        "supersedes": parsed.supersedes,
-        "reconciles": parsed.reconciles,
-        "caveat_count": len(parsed.caveats),
-        "effect_count": len(parsed.effect_summary),
-    })
+    _event(
+        state,
+        deps,
+        "CRITIQUED",
+        {
+            "intent_id": intent.intent_id,
+            "verdict": parsed.verdict,
+            "confidence": parsed.confidence,
+            "open_questions": parsed.open_questions,
+            "contradicts": parsed.contradicts,
+            "revalidates": parsed.revalidates,
+            "revalidation_required": parsed.revalidation_required,
+            "supersedes": parsed.supersedes,
+            "reconciles": parsed.reconciles,
+            "caveat_count": len(parsed.caveats),
+            "effect_count": len(parsed.effect_summary),
+        },
+    )
     return {"review": parsed.model_dump(mode="json")}
 
 
@@ -157,12 +180,14 @@ async def commit_evidence(
         )
 
     coverage = get_coverage(state).with_record(generated.selected_columns)
-    coverage = coverage.model_copy(update={
-        "tested_dedupe_keys": [
-            *coverage.tested_dedupe_keys,
-            intent.dedupe_key(),
-        ],
-    })
+    coverage = coverage.model_copy(
+        update={
+            "tested_dedupe_keys": [
+                *coverage.tested_dedupe_keys,
+                intent.dedupe_key(),
+            ],
+        }
+    )
 
     agenda, created_tasks, completed_task_id = _agenda_after_commit(
         state,
@@ -179,10 +204,7 @@ async def commit_evidence(
 
     update: EvidenceCommitUpdate = {
         "evidence": [evidence.model_dump(mode="json")],
-        "evidence_relations": [
-            item.model_dump(mode="json")
-            for item in relations
-        ],
+        "evidence_relations": [item.model_dump(mode="json") for item in relations],
         "coverage": coverage.model_dump(mode="json"),
         "agenda": [item.model_dump(mode="json") for item in agenda],
         "intent": None,
@@ -197,18 +219,28 @@ async def commit_evidence(
             update["sub_goals"] = goals
 
     if completed_task_id:
-        _event(state, deps, "AGENDA_TASK_COMPLETED", {
-            "task_id": completed_task_id,
-            "completion_evidence_id": evidence.evidence_id,
-        })
+        _event(
+            state,
+            deps,
+            "AGENDA_TASK_COMPLETED",
+            {
+                "task_id": completed_task_id,
+                "completion_evidence_id": evidence.evidence_id,
+            },
+        )
     for task in created_tasks:
-        _event(state, deps, "AGENDA_TASK_CREATED", {
-            "task_id": task.task_id,
-            "kind": task.kind,
-            "source_evidence_ids": task.source_evidence_ids,
-            "goal_id": task.goal_id,
-            "question": task.question,
-        })
+        _event(
+            state,
+            deps,
+            "AGENDA_TASK_CREATED",
+            {
+                "task_id": task.task_id,
+                "kind": task.kind,
+                "source_evidence_ids": task.source_evidence_ids,
+                "goal_id": task.goal_id,
+                "question": task.question,
+            },
+        )
     for relation in relations:
         _event(
             state,
@@ -217,14 +249,19 @@ async def commit_evidence(
             relation.model_dump(mode="json"),
         )
 
-    _event(state, deps, "EVIDENCE_COMMITTED", {
-        "evidence_id": evidence.evidence_id,
-        "intent_id": intent.intent_id,
-        "goal_id": intent.goal_id,
-        "purpose": intent.purpose,
-        "parent_evidence_ids": intent.parent_evidence_ids,
-        "contradicts": evidence.contradicts,
-    })
+    _event(
+        state,
+        deps,
+        "EVIDENCE_COMMITTED",
+        {
+            "evidence_id": evidence.evidence_id,
+            "intent_id": intent.intent_id,
+            "goal_id": intent.goal_id,
+            "purpose": intent.purpose,
+            "parent_evidence_ids": intent.parent_evidence_ids,
+            "contradicts": evidence.contradicts,
+        },
+    )
     return update
 
 
@@ -243,34 +280,39 @@ async def reject_attempt(
         released = False
         for item in get_agenda(state):
             if item.task_id == intent.task_id and item.status == "in_progress":
-                item = item.model_copy(update={
-                    "status": "pending",
-                    "selected_intent_id": None,
-                })
+                item = item.model_copy(
+                    update={
+                        "status": "pending",
+                        "selected_intent_id": None,
+                    }
+                )
                 released = True
             agenda.append(item.model_dump(mode="json"))
         if released:
             payload["agenda"] = agenda
-            _event(state, deps, "AGENDA_TASK_RELEASED", {
-                "task_id": intent.task_id,
-                "intent_id": intent.intent_id,
-            })
+            _event(
+                state,
+                deps,
+                "AGENDA_TASK_RELEASED",
+                {
+                    "task_id": intent.task_id,
+                    "intent_id": intent.intent_id,
+                },
+            )
 
     if intent is not None:
-        payload["rejected"] = [{
-            "intent_id": intent.intent_id,
-            "dedupe_key": intent.dedupe_key(),
-            "stage": (
-                "critic"
-                if review
-                else "result"
-                if state.get("candidate_ref")
-                else "code"
-            ),
-            "reasons": reasons,
-            "goal_id": intent.goal_id,
-            "question": intent.question,
-        }]
+        payload["rejected"] = [
+            {
+                "intent_id": intent.intent_id,
+                "dedupe_key": intent.dedupe_key(),
+                "stage": (
+                    "critic" if review else "result" if state.get("candidate_ref") else "code"
+                ),
+                "reasons": reasons,
+                "goal_id": intent.goal_id,
+                "question": intent.question,
+            }
+        ]
 
     if issue := _stuck_issue(state, intent, reasons):
         payload["issues"] = [issue.model_dump(mode="json")]

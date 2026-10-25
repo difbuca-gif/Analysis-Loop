@@ -20,6 +20,8 @@ from ...state import (
     pending_agenda_tasks,
     unresolved_contradictions,
 )
+from ..failure_policy import service_failure_action
+from ..node_updates import FinalizeUpdate
 from ._shared import _event
 
 
@@ -41,26 +43,16 @@ def run_summary(state: AnalysisGraphState) -> dict[str, Any]:
         "evidence_count": len(evidence),
         "rejected_count": len(state.get("rejected") or []),
         "agenda": state.get("agenda") or [],
-        "pending_agenda": [
-            item.model_dump(mode="json")
-            for item in pending_agenda_tasks(state)
-        ],
+        "pending_agenda": [item.model_dump(mode="json") for item in pending_agenda_tasks(state)],
         "evidence_relations": [
-            item.model_dump(mode="json")
-            for item in get_evidence_relations(state)
+            item.model_dump(mode="json") for item in get_evidence_relations(state)
         ],
         "active_evidence_ids": [item.evidence_id for item in reportable],
         "incomplete_goal_ids": [
-            goal.goal_id
-            for goal in get_sub_goals(state)
-            if goal.status != "converged"
+            goal.goal_id for goal in get_sub_goals(state) if goal.status != "converged"
         ],
-        "pending_task_ids": [
-            task.task_id for task in pending_agenda_tasks(state)
-        ],
-        "unresolved_contradictions": [
-            list(pair) for pair in unresolved_contradictions(state)
-        ],
+        "pending_task_ids": [task.task_id for task in pending_agenda_tasks(state)],
+        "unresolved_contradictions": [list(pair) for pair in unresolved_contradictions(state)],
         "stop_reason": state.get("stop_reason"),
         "goals": [
             {
@@ -120,9 +112,7 @@ async def review_report(
                         if item.evidence_id in cited_ids
                     ],
                     results={key: results[key] for key in sorted(cited_ids)},
-                    dataset_profile=(
-                        profile.model_dump(mode="json") if profile else None
-                    ),
+                    dataset_profile=(profile.model_dump(mode="json") if profile else None),
                     timeout_seconds=timeout_seconds,
                 ),
                 timeout=timeout_seconds,
@@ -141,9 +131,7 @@ async def review_report(
                 review=review.model_dump(mode="json"),
             )
         except Exception as exc:  # noqa: BLE001 - 의미 검토 실패는 승인하지 않는다.
-            outcome["error"] = (
-                f"보고서 의미 검토 실패: {type(exc).__name__}: {exc}"[:500]
-            )
+            outcome["error"] = f"보고서 의미 검토 실패: {type(exc).__name__}: {exc}"[:500]
 
     _event(state, deps, "REPORT_REVIEWED", outcome)
     return outcome
@@ -191,6 +179,11 @@ async def write_report(
     if (
         deps.critic is not None
         and state.get("stop_code") != StopCode.BUDGET_EXHAUSTED.value
+        and not (
+            state.get("stop_code") == StopCode.SERVICE_UNAVAILABLE.value
+            and service_failure_action(getattr(deps.critic, "last_failure_kind", None))
+            == "stop_run"
+        )
     ):
         report_md = await deps.critic.generate_report(
             run_summary=summary,
@@ -198,6 +191,11 @@ async def write_report(
             rejected=state.get("rejected") or [],
             timeout_seconds=timeout_seconds,
         )
+
+    if report_md is None and deps.critic is not None:
+        kind = getattr(deps.critic, "last_failure_kind", None)
+        if kind and service_failure_action(kind, stage="report") == "fallback_report":
+            _event(state, deps, "REPORT_FALLBACK", {"kind": kind})
 
     if report_md:
         validation = validate_report(
@@ -213,12 +211,17 @@ async def write_report(
                 tuple(pair) for pair in summary["unresolved_contradictions"]
             ],
         )
-        _event(state, deps, "REPORT_VALIDATED", {
-            "passed": validation["passed"],
-            "errors": validation["errors"],
-            "warnings": validation["warnings"],
-            "citation_count": validation["citation_count"],
-        })
+        _event(
+            state,
+            deps,
+            "REPORT_VALIDATED",
+            {
+                "passed": validation["passed"],
+                "errors": validation["errors"],
+                "warnings": validation["warnings"],
+                "citation_count": validation["citation_count"],
+            },
+        )
 
         if validation["passed"]:
             semantic = await review_report(
@@ -261,7 +264,7 @@ async def finalize(
     deps: RuntimeDeps,
     *,
     timeout_seconds: float = DEFAULT_READ_TIMEOUT,
-) -> dict[str, Any]:
+) -> FinalizeUpdate:
     """최종 보고서 Artifact와 종료 메타데이터를 만든다."""
     summary = run_summary(state)
     ref, is_markdown = await write_report(
@@ -271,10 +274,15 @@ async def finalize(
         timeout_seconds=timeout_seconds,
     )
 
-    _event(state, deps, "FINALIZED", {
-        "evidence_count": summary["evidence_count"],
-        "has_md_report": is_markdown,
-    })
+    _event(
+        state,
+        deps,
+        "FINALIZED",
+        {
+            "evidence_count": summary["evidence_count"],
+            "has_md_report": is_markdown,
+        },
+    )
     return {
         "report_ref": ref.model_dump(mode="json"),
         "status": state.get("status") or RunStatus.COMPLETED.value,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...contracts import ArtifactKind, RunStatus, StopCode
+from ...contracts import ArtifactKind, ResearchIntent, RunStatus, StopCode, SubGoal
 from ...data.profiling import load_dataframe, profile_dataframe
 from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...runtime import RuntimeDeps
@@ -28,6 +28,8 @@ from ...state import (
     remaining_seconds,
     terminal_update,
 )
+from ..node_updates import PlanningUpdate
+from . import planner_decision as decisions
 from ._shared import _event
 from .goal_policy import _apply_goal_verdict
 from .intent_policy import (
@@ -36,16 +38,59 @@ from .intent_policy import (
     _reuse_evidence_error,
 )
 from .planner_context import _select_planner_findings
-from .planner_decision import (
-    NO_INTENT_CODE,
-    _goal_progress,
-    _no_intent,
-    _rejected_intent,
-    _stalled,
-)
+from .planner_decision import NO_INTENT_CODE
 
 
-async def profile_data(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, Any]:
+def _record_decision(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    decision: decisions.PlannerDecision,
+) -> PlanningUpdate | None:
+    for event in decision.events:
+        _event(state, deps, event.name, event.payload)
+    return decision.update
+
+
+def _stalled(state: AnalysisGraphState, deps: RuntimeDeps, **kwargs: Any) -> PlanningUpdate:
+    update = _record_decision(state, deps, decisions.stalled(state, **kwargs))
+    assert update is not None
+    return update
+
+
+def _goal_progress(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    goals: list[SubGoal],
+    verdict: dict[str, Any],
+) -> tuple[list[SubGoal], PlanningUpdate]:
+    updated, decision = decisions.goal_progress(state, goals, verdict)
+    update = _record_decision(state, deps, decision)
+    assert update is not None
+    return updated, update
+
+
+def _no_intent(state: AnalysisGraphState, deps: RuntimeDeps, **kwargs: Any) -> PlanningUpdate:
+    decision = decisions.no_intent(
+        state,
+        failure_reason=getattr(deps.planner, "last_error", None),
+        failure_kind=getattr(deps.planner, "last_failure_kind", None),
+        **kwargs,
+    )
+    update = _record_decision(state, deps, decision)
+    assert update is not None
+    return update
+
+
+def _rejected_intent(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    intent: ResearchIntent,
+    **kwargs: Any,
+) -> PlanningUpdate | None:
+    return _record_decision(state, deps, decisions.rejected_intent(state, intent, **kwargs))
+
+
+async def profile_data(state: AnalysisGraphState, deps: RuntimeDeps) -> PlanningUpdate:
     """Dataset을 profile하고 원본 profile은 Artifact, compact profile은 State에 둔다."""
     dataset = get_ref(state, "dataset_ref")
     assert dataset is not None, "dataset_ref 없이 그래프를 시작할 수 없다"
@@ -83,7 +128,7 @@ async def profile_data(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str
 async def decompose_objective(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> PlanningUpdate:
     """분석 목표를 SubGoal로 분해한다. 실행당 한 번만 수행한다."""
     if state.get("sub_goals"):
         return {}
@@ -108,33 +153,28 @@ async def decompose_objective(
         state,
         deps,
         "OBJECTIVE_DECOMPOSED",
-        {
-            "goals": [
-                {"id": goal.goal_id, "question": goal.question}
-                for goal in goals
-            ]
-        },
+        {"goals": [{"id": goal.goal_id, "question": goal.question} for goal in goals]},
     )
-    return {
-        "sub_goals": [goal.model_dump(mode="json") for goal in goals]
-    }
+    return {"sub_goals": [goal.model_dump(mode="json") for goal in goals]}
 
 
 async def plan_intent(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> PlanningUpdate:
     """Planner 응답을 검증하고 다음 실행 Intent와 SubGoal 상태를 확정한다."""
     profile = get_profile(state)
     assert profile is not None
     coverage = get_coverage(state)
 
     if deps.planner is None:
-        return terminal_update(
-            status=RunStatus.FAILED,
-            stop_code=StopCode.SERVICE_UNAVAILABLE,
-            reason="planner LLM이 없다",
-        )
+        return {
+            **terminal_update(
+                status=RunStatus.FAILED,
+                stop_code=StopCode.SERVICE_UNAVAILABLE,
+                reason="planner LLM이 없다",
+            )
+        }
 
     all_evidence = get_evidence(state)
     goals = get_sub_goals(state)
@@ -147,9 +187,7 @@ async def plan_intent(
         deps,
         "PLANNER_CONTEXT_SELECTED",
         {
-            "selected_evidence_ids": [
-                finding.evidence_id for finding in findings
-            ],
+            "selected_evidence_ids": [finding.evidence_id for finding in findings],
             "reasons": context_reasons,
             "total_evidence": len(all_evidence),
         },
@@ -163,9 +201,7 @@ async def plan_intent(
         unexplored=coverage.unexplored(profile),
         column_usage=coverage.column_usage,
         prior_findings=findings,
-        unresolved_findings=[
-            finding for finding in findings if finding.needs_follow_up()
-        ],
+        unresolved_findings=[finding for finding in findings if finding.needs_follow_up()],
         rejected_attempts=[
             {
                 "goal_id": rejected.get("goal_id"),
@@ -180,14 +216,12 @@ async def plan_intent(
         recent_inspection=state.get("inspection_summary"),
         recent_evidence_lookup=state.get("evidence_lookup_summary") or [],
         evidence_relations=[
-            relation.model_dump(mode="json")
-            for relation in get_evidence_relations(state)
+            relation.model_dump(mode="json") for relation in get_evidence_relations(state)
         ],
         remaining_seconds=max(0.0, remaining_seconds(state)),
         remaining_iterations=max(
             0,
-            int(state.get("max_iterations", 25))
-            - int(state.get("iteration", 0)),
+            int(state.get("max_iterations", 25)) - int(state.get("iteration", 0)),
         ),
         timeout_seconds=DEFAULT_READ_TIMEOUT,
     )
@@ -267,11 +301,7 @@ async def plan_intent(
     return {
         **goal_update,
         **({"agenda": agenda_update} if agenda_update is not None else {}),
-        **(
-            {"evidence_lookup_summary": []}
-            if intent.execution_mode != "lookup_evidence"
-            else {}
-        ),
+        **({"evidence_lookup_summary": []} if intent.execution_mode != "lookup_evidence" else {}),
         "intent": intent.model_dump(mode="json"),
         "iteration": state.get("iteration", 0) + 1,
         **cycle_reset_update(),
@@ -281,37 +311,26 @@ async def plan_intent(
 async def reuse_evidence(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> PlanningUpdate:
     """검토 완료 Evidence를 추가 계산 없이 현재 SubGoal에 연결한다."""
     intent = get_intent(state)
     assert intent is not None and intent.execution_mode == "reuse_evidence"
     assert intent.goal_id is not None
 
-    evidence_by_id = {
-        item.evidence_id: item for item in get_evidence(state)
-    }
-    selected = [
-        evidence_by_id[evidence_id]
-        for evidence_id in intent.reuse_evidence_ids
-    ]
+    evidence_by_id = {item.evidence_id: item for item in get_evidence(state)}
+    selected = [evidence_by_id[evidence_id] for evidence_id in intent.reuse_evidence_ids]
     invalid = {
         item.evidence_id: evidence_data_applicability(state, item)
         for item in selected
         if evidence_data_applicability(state, item) != "exact_snapshot"
     }
     if invalid:
-        raise ValueError(
-            f"현재 데이터 스냅샷에 직접 재사용할 수 없는 Evidence: {invalid}"
-        )
+        raise ValueError(f"현재 데이터 스냅샷에 직접 재사용할 수 없는 Evidence: {invalid}")
 
     updated = []
     for goal in get_sub_goals(state):
         if goal.goal_id == intent.goal_id:
-            linked = list(
-                dict.fromkeys(
-                    [*goal.evidence_ids, *intent.reuse_evidence_ids]
-                )
-            )
+            linked = list(dict.fromkeys([*goal.evidence_ids, *intent.reuse_evidence_ids]))
             goal = goal.model_copy(update={"evidence_ids": linked})
         updated.append(goal)
 
@@ -322,15 +341,11 @@ async def reuse_evidence(
         {
             "intent_id": intent.intent_id,
             "goal_id": intent.goal_id,
-            "evidence_ids": [
-                item.evidence_id for item in selected
-            ],
+            "evidence_ids": [item.evidence_id for item in selected],
         },
     )
     return {
-        "sub_goals": [
-            goal.model_dump(mode="json") for goal in updated
-        ],
+        "sub_goals": [goal.model_dump(mode="json") for goal in updated],
         "intent": None,
     }
 
@@ -338,7 +353,7 @@ async def reuse_evidence(
 async def mark_data_limited(
     state: AnalysisGraphState,
     deps: RuntimeDeps,
-) -> dict[str, Any]:
+) -> PlanningUpdate:
     """실행 시도 후 현재 데이터로 해결 불가능한 Agenda 작업을 닫는다."""
     intent = get_intent(state)
     assert intent is not None and intent.execution_mode == "mark_data_limited"
@@ -349,25 +364,19 @@ async def mark_data_limited(
     for item in get_agenda(state):
         if item.task_id == intent.task_id:
             if item.attempt_count < 1:
-                raise ValueError(
-                    "시도하지 않은 Agenda 작업은 data_limited로 닫을 수 없다"
-                )
+                raise ValueError("시도하지 않은 Agenda 작업은 data_limited로 닫을 수 없다")
             item = item.model_copy(
                 update={
                     "status": "data_limited",
                     "selected_intent_id": None,
-                    "resolution_reason": (
-                        intent.rationale.strip() or intent.question
-                    ),
+                    "resolution_reason": (intent.rationale.strip() or intent.question),
                 }
             )
             resolved = True
         updated.append(item.model_dump(mode="json"))
 
     if not resolved:
-        raise ValueError(
-            f"Agenda task를 찾을 수 없다: {intent.task_id}"
-        )
+        raise ValueError(f"Agenda task를 찾을 수 없다: {intent.task_id}")
 
     _event(
         state,

@@ -19,6 +19,7 @@ from .contracts import (
     StopCode,
     SubGoal,
 )
+from .orchestration.node_updates import CycleResetUpdate, TerminalUpdate
 
 
 def _append(left: list[Any] | None, right: list[Any] | None) -> list[Any]:
@@ -157,7 +158,7 @@ def new_state(
 
 def terminal_update(
     *, status: RunStatus, stop_code: StopCode, reason: str,
-) -> dict[str, Any]:
+) -> TerminalUpdate:
     """status/stop_code/stop_reason 일괄 갱신."""
     reason = reason.strip()
     if not reason:
@@ -169,7 +170,7 @@ def terminal_update(
     }
 
 
-def cycle_reset_update() -> dict[str, Any]:
+def cycle_reset_update() -> CycleResetUpdate:
     """새 Intent 시작 전 회차 임시 state 초기화."""
     return {
         "last_planner_error": None,

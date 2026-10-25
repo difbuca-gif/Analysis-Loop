@@ -43,7 +43,7 @@ END
 | `graph.py` | Node 등록과 Edge 연결만 담당 |
 | `routes.py` | State를 읽고 다음 Node를 선택하는 라우팅 정책 |
 | `node_updates.py` | Node별 partial State update 타입 |
-| `failure_policy.py` | 공통 외부 서비스 실패 분류 |
+| `failure_policy.py` | 외부 서비스 실패의 종료·시도 거부·보고서 대체 정책 |
 
 ### Node
 
@@ -51,7 +51,7 @@ END
 |---|---|
 | `nodes/planning.py` | Profile, SubGoal 분해, Planner 호출 orchestration |
 | `nodes/planner_context.py` | Planner에 전달할 Evidence 선택 |
-| `nodes/planner_decision.py` | Planner 응답 이후 Goal 진행·실패·Intent 거부 판정 |
+| `nodes/planner_decision.py` | Planner 판정과 이벤트 데이터를 반환하는 순수 정책 |
 | `nodes/goal_policy.py` | SubGoal converge/abandon 적용 규칙 |
 | `nodes/intent_policy.py` | Agenda/중복/재사용 Intent 정책 |
 | `nodes/program.py` | 프로그램 cache 조회와 Codegen 호출 |
@@ -126,3 +126,16 @@ Dataset, 생성 코드, 실행 결과, Figure, Report는 ArtifactStore에 저장
 - 실패 시 다음 경로가 `routes.py`에서 명확하게 보이는가?
 - 새 update key가 `AnalysisGraphState`와 적절한 Node update 타입에 반영됐는가?
 - Resume/Checkpoint 경로에서도 같은 검증 경계가 유지되는가?
+
+## 실패와 관측 경계
+
+- Planner/Codegen/Critic의 연결·설정 장애는 `FAILED / SERVICE_UNAVAILABLE`로 종료한다.
+- Critic 응답 형식·계약 오류는 해당 시도만 거부한다. 재계획 및 기존 반복 상한을 유지한다.
+- 보고서 생성·의미 검토 실패는 검증되지 않은 Markdown을 채택하지 않고 JSON 요약으로 대체한다.
+- 종료된 State는 `assess_progress`에서 예산/회차 종료 코드로 덮어쓰지 않는다.
+- `planner_decision.py`는 `RuntimeDeps`를 받지 않는다. `PlannerDecision`의 update와 event 데이터를 반환하고, `planning.py`가 이벤트를 기록한다. 기존 private helper 호출 경로는 이 경계의 wrapper로 유지한다.
+
+## 타입 검증
+
+`mypy`는 `pyproject.toml`의 `files`에 열거한 orchestration 경계를 검사한다.
+노드 partial update와 종료/회차 초기화 update를 TypedDict로 명시하며, CI에서 반환 필드와 값 타입을 검사한다. 전체 저장소의 타입 검사가 완료됐다는 의미는 아니다.

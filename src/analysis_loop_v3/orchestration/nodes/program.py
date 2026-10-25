@@ -11,7 +11,7 @@ from ...contracts import ArtifactKind, RunStatus, StopCode
 from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...runtime import RuntimeDeps
 from ...state import AnalysisGraphState, get_intent, get_profile
-from ..failure_policy import is_terminal_service_failure
+from ..failure_policy import service_failure_action
 from ..node_updates import CodegenUpdate, ProgramLookupUpdate
 from ._shared import _event, bump_error_streak
 from .code_validation import validate_code
@@ -90,7 +90,7 @@ async def generate_code(
             {"reason": reason, "kind": kind},
         )
 
-        if is_terminal_service_failure(kind):
+        if service_failure_action(kind) == "stop_run":
             return {
                 "status": RunStatus.FAILED.value,
                 "stop_code": StopCode.SERVICE_UNAVAILABLE.value,

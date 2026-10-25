@@ -10,6 +10,37 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 
+class TerminalUpdate(TypedDict, total=False):
+    status: str
+    stop_code: str | None
+    stop_reason: str | None
+
+
+class CycleResetUpdate(TypedDict, total=False):
+    last_planner_error: str | None
+    program_ref: dict[str, Any] | None
+    manifest: dict[str, Any] | None
+    candidate_ref: dict[str, Any] | None
+    figure_refs: list[dict[str, Any]] | None
+    review: dict[str, Any] | None
+    validation_errors: list[dict[str, Any]]
+    error_streak: dict[str, Any]
+    validation_warnings: list[dict[str, Any]]
+    static_repairs: int
+    runtime_repairs: int
+
+
+class PlanningUpdate(CycleResetUpdate, TerminalUpdate, total=False):
+    profile_ref: dict[str, Any]
+    profile: dict[str, Any]
+    sub_goals: list[dict[str, Any]]
+    intent: dict[str, Any] | None
+    agenda: list[dict[str, Any]]
+    evidence_lookup_summary: list[dict[str, Any]]
+    iteration: int
+    issues: list[dict[str, Any]]
+
+
 class ProgramLookupUpdate(TypedDict, total=False):
     program_ref: dict[str, Any] | None
     manifest: dict[str, Any] | None
@@ -39,7 +70,7 @@ class ExecutionUpdate(ValidationUpdate, total=False):
     figure_refs: list[dict[str, Any]]
 
 
-class CritiqueUpdate(TypedDict, total=False):
+class CritiqueUpdate(TerminalUpdate, total=False):
     review: dict[str, Any]
 
 
