@@ -1,10 +1,14 @@
-"""유지보수 리팩터링이 기존 import surface를 깨지 않는지 확인한다."""
+"""유지보수 리팩터링이 기존 import surface와 factory 동작을 깨지 않는지 확인한다."""
+
+from types import SimpleNamespace
 
 from analysis_loop_v3.llm.services import (
     LLMCritic,
     LLMCodegen,
     LLMPlanner,
+    _same_endpoint_model,
     build_services,
+    describe_services,
     resolve_provider,
 )
 from analysis_loop_v3.orchestration.graph import (
@@ -66,3 +70,13 @@ def test_validation_checks_facade_remains_available():
     assert callable(check_manifest)
     assert callable(check_code_matches_manifest)
     assert callable(check_result)
+
+
+def test_same_endpoint_check_accepts_codegen_without_client():
+    cli_codegen = SimpleNamespace()
+    critic = SimpleNamespace(
+        client=SimpleNamespace(model="critic", base_url="http://localhost")
+    )
+
+    assert _same_endpoint_model(cli_codegen, critic) is False
+    assert describe_services(None, cli_codegen, critic)["codegen"].endswith(":local")
