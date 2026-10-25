@@ -31,11 +31,12 @@ from .run_routes import (
     get_run,
     list_runs,
     resume_run,
-    router as run_router,
     stop_run,
 )
+from .run_routes import router as run_router
 from .runs import RunRegistry, ServerContext, build_reader_service
-from .system_routes import health, router as system_router
+from .system_routes import health
+from .system_routes import router as system_router
 
 
 @asynccontextmanager
