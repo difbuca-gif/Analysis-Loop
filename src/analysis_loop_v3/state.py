@@ -20,9 +20,11 @@ from .contracts import (
     SubGoal,
 )
 
+
 def _append(left: list[Any] | None, right: list[Any] | None) -> list[Any]:
     """append-only reducer. Evidence 누적용."""
     return (left or []) + (right or [])
+
 
 class AnalysisGraphState(TypedDict, total=False):
     # --- 실행 식별 ---
@@ -43,13 +45,13 @@ class AnalysisGraphState(TypedDict, total=False):
     deadline_at: float
 
     # --- 현재 분석 사이클 ---
-    intent: dict[str, Any] | None            # ResearchIntent
+    intent: dict[str, Any] | None  # ResearchIntent
     # 다음 계획용 직전 거부 사유
     last_planner_error: str | None
-    program_ref: dict[str, Any] | None       # ArtifactRef -> 코드 본문
-    manifest: dict[str, Any] | None          # GeneratedAnalysis - code
-    candidate_ref: dict[str, Any] | None     # ArtifactRef -> result.json
-    figure_refs: list[dict[str, Any]] | None # list[ArtifactRef] -> figures
+    program_ref: dict[str, Any] | None  # ArtifactRef -> 코드 본문
+    manifest: dict[str, Any] | None  # GeneratedAnalysis - code
+    candidate_ref: dict[str, Any] | None  # ArtifactRef -> result.json
+    figure_refs: list[dict[str, Any]] | None  # list[ArtifactRef] -> figures
 
     # 정적/런타임 재생성 횟수
     static_repairs: int
@@ -60,7 +62,7 @@ class AnalysisGraphState(TypedDict, total=False):
     # non-blocking validation warning
     validation_warnings: list[dict[str, Any]]
 
-    review: dict[str, Any] | None            # Critic 판정
+    review: dict[str, Any] | None  # Critic 판정
     # 미해결 Agenda
     agenda: list[dict[str, Any]]
     # data inspection summary/history
@@ -76,7 +78,7 @@ class AnalysisGraphState(TypedDict, total=False):
     rejected: Annotated[list[dict[str, Any]], _append]
     # 반복 실패로 중단된 회차
     issues: Annotated[list[dict[str, Any]], _append]
-    coverage: dict[str, Any]                 # AnalysisCoverage
+    coverage: dict[str, Any]  # AnalysisCoverage
 
     # --- 진행 제어 ---
     iteration: int
@@ -88,6 +90,7 @@ class AnalysisGraphState(TypedDict, total=False):
     stop_code: str | None
     stop_reason: str | None
     report_ref: dict[str, Any] | None
+
 
 # 생성
 
@@ -149,6 +152,7 @@ def new_state(
         report_ref=None,
     )
 
+
 # 타입 있는 접근자 — State 값을 계약 모델로 복원한다.
 
 def terminal_update(
@@ -163,6 +167,7 @@ def terminal_update(
         "stop_code": stop_code.value,
         "stop_reason": reason,
     }
+
 
 def cycle_reset_update() -> dict[str, Any]:
     """새 Intent 시작 전 회차 임시 state 초기화."""
@@ -180,31 +185,39 @@ def cycle_reset_update() -> dict[str, Any]:
         "runtime_repairs": 0,
     }
 
+
 def get_intent(state: AnalysisGraphState) -> ResearchIntent | None:
     raw = state.get("intent")
     return ResearchIntent.model_validate(raw) if raw else None
+
 
 def get_profile(state: AnalysisGraphState) -> DatasetProfile | None:
     raw = state.get("profile")
     return DatasetProfile.model_validate(raw) if raw else None
 
+
 def get_sub_goals(state: AnalysisGraphState) -> list[SubGoal]:
     return [SubGoal.model_validate(g) for g in state.get("sub_goals") or []]
+
 
 def all_goals_closed(state: AnalysisGraphState) -> bool:
     """SubGoal이 존재하고 모두 종료됐는지 판정."""
     goals = get_sub_goals(state)
     return bool(goals) and not any(g.is_open for g in goals)
 
+
 def get_coverage(state: AnalysisGraphState) -> AnalysisCoverage:
     return AnalysisCoverage.model_validate(state.get("coverage") or {})
+
 
 def get_ref(state: AnalysisGraphState, key: str) -> ArtifactRef | None:
     raw = state.get(key)
     return ArtifactRef.model_validate(raw) if raw else None
 
+
 def get_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
     return [EvidenceRecord.model_validate(e) for e in state.get("evidence") or []]
+
 
 def evidence_data_applicability(
     state: AnalysisGraphState,
@@ -230,6 +243,7 @@ def evidence_data_applicability(
         return "revalidation_required"
     return "unknown"
 
+
 def superseded_evidence_ids(state: AnalysisGraphState) -> set[str]:
     """관계 graph 기준 inactive Evidence ID."""
     return {
@@ -238,10 +252,12 @@ def superseded_evidence_ids(state: AnalysisGraphState) -> set[str]:
         if relation.kind == "supersedes"
     }
 
+
 def active_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
     """superseded되지 않은 Evidence."""
     superseded = superseded_evidence_ids(state)
     return [item for item in get_evidence(state) if item.evidence_id not in superseded]
+
 
 def current_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
     """현재 snapshot에 직접 적용 가능한 active Evidence."""
@@ -250,8 +266,10 @@ def current_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
         if evidence_data_applicability(state, item) == "exact_snapshot"
     ]
 
+
 def get_agenda(state: AnalysisGraphState) -> list[AgendaTask]:
     return [AgendaTask.model_validate(item) for item in state.get("agenda") or []]
+
 
 def pending_agenda_tasks(state: AnalysisGraphState) -> list[AgendaTask]:
     return [
@@ -259,11 +277,13 @@ def pending_agenda_tasks(state: AnalysisGraphState) -> list[AgendaTask]:
         if item.status in {"pending", "in_progress"}
     ]
 
+
 def get_evidence_relations(state: AnalysisGraphState) -> list[EvidenceRelation]:
     return [
         EvidenceRelation.model_validate(item)
         for item in state.get("evidence_relations") or []
     ]
+
 
 def unresolved_contradictions(
     state: AnalysisGraphState,
@@ -291,6 +311,7 @@ def unresolved_contradictions(
         if key not in unresolved:
             unresolved.append(key)
     return unresolved
+
 
 def remaining_seconds(state: AnalysisGraphState) -> float:
     """남은 실행 시간(초). 음수는 예산 초과."""
