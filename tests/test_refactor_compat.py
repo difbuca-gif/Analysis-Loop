@@ -16,8 +16,8 @@ from analysis_loop_v3.contracts import (
     ValidationReport,
 )
 from analysis_loop_v3.llm.services import (
-    LLMCritic,
     LLMCodegen,
+    LLMCritic,
     LLMPlanner,
     _same_endpoint_model,
     build_services,
