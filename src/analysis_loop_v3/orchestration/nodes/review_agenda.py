@@ -1,0 +1,161 @@
+"""Evidence 채택 후 Agenda 상태 전이 규칙."""
+
+from __future__ import annotations
+
+from ...contracts import AgendaTask, CriticReview, EvidenceRecord, ResearchIntent
+from ...state import AnalysisGraphState, get_agenda
+from .review_evidence import revalidation_changed_conditions
+
+
+def agenda_after_commit(
+    state: AnalysisGraphState,
+    *,
+    intent: ResearchIntent,
+    review: CriticReview,
+    evidence: EvidenceRecord,
+) -> tuple[list[AgendaTask], list[AgendaTask], str | None]:
+    """선택 작업 종료 후 후속 질문·재검증·모순 해결 작업을 갱신한다."""
+    updated: list[AgendaTask] = []
+    completed_id: str | None = None
+
+    superseded = set(review.supersedes)
+    reconciled = set(review.reconciles)
+    for item in get_agenda(state):
+        selected = item.task_id == intent.task_id
+        contradiction_resolved = (
+            item.kind == "resolve_contradiction"
+            and (
+                bool(superseded.intersection(item.source_evidence_ids))
+                or set(item.source_evidence_ids).issubset(reconciled)
+            )
+        )
+        revalidation_changes = (
+            revalidation_changed_conditions(
+                state,
+                source_ids=item.source_evidence_ids,
+                evidence=evidence,
+            )
+            if selected and item.kind == "revalidate"
+            else []
+        )
+        revalidation_resolved = (
+            selected
+            and item.kind == "revalidate"
+            and set(item.source_evidence_ids).issubset(set(review.revalidates))
+            and bool(revalidation_changes)
+        )
+        should_complete = (
+            selected and item.kind == "follow_up"
+        ) or contradiction_resolved or revalidation_resolved
+
+        if should_complete and item.status != "completed":
+            item = item.model_copy(update={
+                "status": "completed",
+                "selected_intent_id": intent.intent_id,
+                "completion_evidence_id": evidence.evidence_id,
+                "resolution_reason": review.claim.strip(),
+            })
+            if selected:
+                completed_id = item.task_id
+        elif selected and item.kind in {"resolve_contradiction", "revalidate"}:
+            if item.kind == "resolve_contradiction":
+                reason = "accepted evidence did not resolve contradiction"
+            elif set(item.source_evidence_ids).issubset(set(review.revalidates)):
+                reason = (
+                    "critic marked revalidation, but method/protocol/data/transform "
+                    "conditions did not change"
+                )
+            else:
+                reason = "accepted evidence did not explicitly revalidate source evidence"
+            item = item.model_copy(update={
+                "status": "pending",
+                "selected_intent_id": None,
+                "resolution_reason": reason,
+            })
+        updated.append(item)
+
+    def normalized(text: str) -> str:
+        return " ".join(text.split()).casefold()
+
+    unresolved_followups = {
+        (item.goal_id, normalized(item.question))
+        for item in updated
+        if item.status != "completed" and item.kind == "follow_up"
+    }
+    unresolved_conflicts = {
+        frozenset(item.source_evidence_ids)
+        for item in updated
+        if item.status != "completed" and item.kind == "resolve_contradiction"
+    }
+    unresolved_revalidations = {
+        (item.goal_id, normalized(item.question))
+        for item in updated
+        if item.status != "completed" and item.kind == "revalidate"
+    }
+    requested_revalidations = {
+        normalized(str(question))
+        for question in review.revalidation_required
+        if str(question).strip()
+    }
+
+    created: list[AgendaTask] = []
+    for raw_question in review.open_questions:
+        question = str(raw_question).strip()
+        if not question:
+            continue
+        key = (intent.goal_id, normalized(question))
+        if key in unresolved_followups or normalized(question) in requested_revalidations:
+            continue
+        task = AgendaTask(
+            kind="follow_up",
+            goal_id=intent.goal_id,
+            question=question,
+            rationale="Critic이 현재 claim의 신뢰도·범위를 바꿀 수 있는 후속 질문으로 지정",
+            priority=70,
+            source_evidence_ids=[evidence.evidence_id],
+        )
+        updated.append(task)
+        created.append(task)
+        unresolved_followups.add(key)
+
+    for raw_question in review.revalidation_required:
+        question = str(raw_question).strip()
+        if not question:
+            continue
+        key = (intent.goal_id, normalized(question))
+        if key in unresolved_revalidations:
+            continue
+        task = AgendaTask(
+            kind="revalidate",
+            goal_id=intent.goal_id,
+            question=question,
+            rationale=(
+                "Critic이 현재 Evidence의 신뢰도·범위를 독립 조건에서 다시 확인하도록 지정"
+            ),
+            priority=80,
+            source_evidence_ids=[evidence.evidence_id],
+        )
+        updated.append(task)
+        created.append(task)
+        unresolved_revalidations.add(key)
+
+    for target_id in review.contradicts:
+        pair = frozenset({evidence.evidence_id, target_id})
+        if len(pair) < 2 or pair in unresolved_conflicts:
+            continue
+        task = AgendaTask(
+            kind="resolve_contradiction",
+            goal_id=intent.goal_id,
+            question=f"Evidence {evidence.evidence_id}와 {target_id}의 모순을 해소한다",
+            rationale="Critic이 같은 실행의 기존 Evidence와 실제 모순을 선언",
+            priority=90,
+            source_evidence_ids=[evidence.evidence_id, target_id],
+        )
+        updated.append(task)
+        created.append(task)
+        unresolved_conflicts.add(pair)
+
+    return updated, created, completed_id
+
+
+_agenda_after_commit = agenda_after_commit
