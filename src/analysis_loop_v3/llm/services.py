@@ -16,15 +16,15 @@ from .memory import AnalysisMemory
 from .planner_service import LLMPlanner
 from .service_common import (
     VALID_PROVIDERS,
+    _dumps,
+    _goal_verdict,
     _LLMCriticReview,
     _LLMGeneratedAnalysis,
     _LLMResearchIntent,
-    _RoleService,
-    _dumps,
-    _goal_verdict,
     _parse_goals,
     _profile_digest,
     _role_env,
+    _RoleService,
     build_role_client,
     load_prompt,
     resolve_provider,
