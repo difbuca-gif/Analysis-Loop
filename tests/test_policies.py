@@ -1,10 +1,10 @@
 from analysis_loop_v3.contracts import AgendaTask, ResearchIntent, SubGoal
-from analysis_loop_v3.orchestration.nodes.goal_policy import apply_goal_verdict
 from analysis_loop_v3.orchestration.nodes.intent_policy import (
     agenda_intent_error,
     repeated_action_error,
 )
-from analysis_loop_v3.orchestration.nodes.rejection_policy import rejection_reasons
+from analysis_loop_v3.orchestration.nodes.planner_decision import apply_goal_verdict
+from analysis_loop_v3.orchestration.nodes.review import rejection_reasons
 
 
 def test_goal_cannot_converge_without_evidence():

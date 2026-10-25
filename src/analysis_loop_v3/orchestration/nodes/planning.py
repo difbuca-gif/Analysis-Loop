@@ -1,6 +1,6 @@
 """프로파일링, 목표 분해, 분석 의도 결정.
 
-세부 정책은 planner_context.py / goal_policy.py / intent_policy.py /
+세부 정책은 planner_context.py / intent_policy.py /
 planner_decision.py에 분리한다. 이 파일은 LangGraph Node orchestration만 담당한다.
 """
 
@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...contracts import ArtifactKind, ResearchIntent, RunStatus, StopCode, SubGoal
+from ...contracts import (
+    AnalysisCoverage,
+    ArtifactKind,
+    DatasetProfile,
+    ResearchIntent,
+    RunStatus,
+    StopCode,
+    SubGoal,
+)
 from ...data.profiling import load_dataframe, profile_dataframe
 from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...runtime import RuntimeDeps
@@ -31,7 +39,6 @@ from ...state import (
 from ..node_updates import PlanningUpdate
 from . import planner_decision as decisions
 from ._shared import _event
-from .goal_policy import _apply_goal_verdict
 from .intent_policy import (
     _agenda_intent_error,
     _repeated_action_error,
@@ -39,55 +46,7 @@ from .intent_policy import (
 )
 from .planner_context import _select_planner_findings
 from .planner_decision import NO_INTENT_CODE
-
-
-def _record_decision(
-    state: AnalysisGraphState,
-    deps: RuntimeDeps,
-    decision: decisions.PlannerDecision,
-) -> PlanningUpdate | None:
-    for event in decision.events:
-        _event(state, deps, event.name, event.payload)
-    return decision.update
-
-
-def _stalled(state: AnalysisGraphState, deps: RuntimeDeps, **kwargs: Any) -> PlanningUpdate:
-    update = _record_decision(state, deps, decisions.stalled(state, **kwargs))
-    assert update is not None
-    return update
-
-
-def _goal_progress(
-    state: AnalysisGraphState,
-    deps: RuntimeDeps,
-    goals: list[SubGoal],
-    verdict: dict[str, Any],
-) -> tuple[list[SubGoal], PlanningUpdate]:
-    updated, decision = decisions.goal_progress(state, goals, verdict)
-    update = _record_decision(state, deps, decision)
-    assert update is not None
-    return updated, update
-
-
-def _no_intent(state: AnalysisGraphState, deps: RuntimeDeps, **kwargs: Any) -> PlanningUpdate:
-    decision = decisions.no_intent(
-        state,
-        failure_reason=getattr(deps.planner, "last_error", None),
-        failure_kind=getattr(deps.planner, "last_failure_kind", None),
-        **kwargs,
-    )
-    update = _record_decision(state, deps, decision)
-    assert update is not None
-    return update
-
-
-def _rejected_intent(
-    state: AnalysisGraphState,
-    deps: RuntimeDeps,
-    intent: ResearchIntent,
-    **kwargs: Any,
-) -> PlanningUpdate | None:
-    return _record_decision(state, deps, decisions.rejected_intent(state, intent, **kwargs))
+from .planner_decision import apply_goal_verdict as _apply_goal_verdict
 
 
 async def profile_data(state: AnalysisGraphState, deps: RuntimeDeps) -> PlanningUpdate:
@@ -388,6 +347,99 @@ async def mark_data_limited(
         },
     )
     return {"agenda": updated, "intent": None}
+
+
+def _record_decision(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    decision: decisions.PlannerDecision,
+) -> PlanningUpdate | None:
+    for event in decision.events:
+        _event(state, deps, event.name, event.payload)
+    return decision.update
+
+
+def _stalled(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    *,
+    goal_update: PlanningUpdate,
+    reason: str | None = None,
+    planner_error: str | None = None,
+) -> PlanningUpdate:
+    update = _record_decision(
+        state,
+        deps,
+        decisions.stalled(
+            state,
+            goal_update=goal_update,
+            reason=reason,
+            planner_error=planner_error,
+        ),
+    )
+    assert update is not None
+    return update
+
+
+def _goal_progress(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    goals: list[SubGoal],
+    verdict: dict[str, Any],
+) -> tuple[list[SubGoal], PlanningUpdate]:
+    updated, decision = decisions.goal_progress(state, goals, verdict)
+    update = _record_decision(state, deps, decision)
+    assert update is not None
+    return updated, update
+
+
+def _no_intent(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    *,
+    verdict: dict[str, Any],
+    updated_goals: list[SubGoal],
+    goal_update: PlanningUpdate,
+) -> PlanningUpdate:
+    decision = decisions.no_intent(
+        state,
+        failure_reason=getattr(deps.planner, "last_error", None),
+        failure_kind=getattr(deps.planner, "last_failure_kind", None),
+        verdict=verdict,
+        updated_goals=updated_goals,
+        goal_update=goal_update,
+    )
+    update = _record_decision(state, deps, decision)
+    assert update is not None
+    return update
+
+
+def _rejected_intent(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    intent: ResearchIntent,
+    *,
+    profile: DatasetProfile,
+    goals: list[SubGoal],
+    evidence_ids: set[str],
+    coverage: AnalysisCoverage,
+    updated_goals: list[SubGoal],
+    goal_update: PlanningUpdate,
+) -> PlanningUpdate | None:
+    return _record_decision(
+        state,
+        deps,
+        decisions.rejected_intent(
+            state,
+            intent,
+            profile=profile,
+            goals=goals,
+            evidence_ids=evidence_ids,
+            coverage=coverage,
+            updated_goals=updated_goals,
+            goal_update=goal_update,
+        ),
+    )
 
 
 __all__ = [

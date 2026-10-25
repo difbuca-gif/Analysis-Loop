@@ -19,7 +19,6 @@ from ...validation.checks import validate_intent_references
 from ..failure_policy import service_failure_action
 from ..node_updates import PlanningUpdate
 from ._shared import STUCK_THRESHOLD, bump_error_streak
-from .goal_policy import apply_goal_verdict
 from .intent_policy import agenda_intent_error, repeated_action_error, reuse_evidence_error
 
 NO_INTENT_CODE = "planner_no_intent"
@@ -35,49 +34,6 @@ class PolicyEvent:
 class PlannerDecision:
     update: PlanningUpdate | None
     events: tuple[PolicyEvent, ...] = ()
-
-
-def _with_events(events: list[PolicyEvent], decision: PlannerDecision) -> PlannerDecision:
-    return PlannerDecision(decision.update, (*events, *decision.events))
-
-
-def stalled(
-    state: AnalysisGraphState,
-    *,
-    goal_update: PlanningUpdate,
-    reason: str | None = None,
-    planner_error: str | None = None,
-) -> PlannerDecision:
-    """Intent 미생성 회차를 기록하고 연속 실패 시 종료한다."""
-    events: list[PolicyEvent] = []
-    streak = bump_error_streak(state, [{"code": NO_INTENT_CODE}])
-    update: PlanningUpdate = {
-        **goal_update,
-        "intent": None,
-        "error_streak": streak,
-        "last_planner_error": planner_error,
-    }
-    if streak.get("count", 0) < STUCK_THRESHOLD:
-        return PlannerDecision(update, tuple(events))
-    issue = LoopIssue(
-        label=NO_INTENT_CODE,
-        count=int(streak["count"]),
-        iteration=int(state.get("iteration", 0)),
-        messages=[m for m in (reason, planner_error) if m][:2],
-    )
-    events.append(PolicyEvent("PLANNER_STUCK", issue.model_dump(mode="json")))
-    return PlannerDecision(
-        {
-            **update,
-            "issues": [issue.model_dump(mode="json")],
-            **terminal_update(
-                status=RunStatus.FAILED,
-                stop_code=StopCode.PLANNER_STUCK,
-                reason=f"플래너가 {streak['count']}회 연속 분석 의도를 만들지 못했다",
-            ),
-        },
-        tuple(events),
-    )
 
 
 def goal_progress(
@@ -245,6 +201,111 @@ def rejected_intent(
             ),
         )
     return PlannerDecision(None, tuple(events))
+
+
+def stalled(
+    state: AnalysisGraphState,
+    *,
+    goal_update: PlanningUpdate,
+    reason: str | None = None,
+    planner_error: str | None = None,
+) -> PlannerDecision:
+    """Intent 미생성 회차를 기록하고 연속 실패 시 종료한다."""
+    events: list[PolicyEvent] = []
+    streak = bump_error_streak(state, [{"code": NO_INTENT_CODE}])
+    update: PlanningUpdate = {
+        **goal_update,
+        "intent": None,
+        "error_streak": streak,
+        "last_planner_error": planner_error,
+    }
+    if streak.get("count", 0) < STUCK_THRESHOLD:
+        return PlannerDecision(update, tuple(events))
+    issue = LoopIssue(
+        label=NO_INTENT_CODE,
+        count=int(streak["count"]),
+        iteration=int(state.get("iteration", 0)),
+        messages=[m for m in (reason, planner_error) if m][:2],
+    )
+    events.append(PolicyEvent("PLANNER_STUCK", issue.model_dump(mode="json")))
+    return PlannerDecision(
+        {
+            **update,
+            "issues": [issue.model_dump(mode="json")],
+            **terminal_update(
+                status=RunStatus.FAILED,
+                stop_code=StopCode.PLANNER_STUCK,
+                reason=f"플래너가 {streak['count']}회 연속 분석 의도를 만들지 못했다",
+            ),
+        },
+        tuple(events),
+    )
+
+
+def apply_goal_verdict(
+    goals: list[SubGoal],
+    verdict: dict[str, Any],
+    evidence_by_goal: dict[str, list[str]],
+    attempts_by_goal: dict[str, int] | None = None,
+    blocked_goal_ids: set[str] | None = None,
+) -> tuple[list[SubGoal], list[str]]:
+    """Planner verdict를 Goal 상태에 적용하되 조기 종료를 막는다.
+
+    converged에는 Evidence가 필요하고, abandoned에는 최소 한 번의 시도가 필요하다.
+    pending Agenda가 남은 Goal은 converged로 닫지 않는다.
+    """
+    attempts_by_goal = attempts_by_goal or {}
+    blocked_goal_ids = blocked_goal_ids or set()
+    note = str(verdict.get("closing_note") or "")
+    converged = set(verdict.get("converged") or [])
+    abandoned = set(verdict.get("abandoned") or [])
+    changed: list[str] = []
+
+    updated: list[SubGoal] = []
+    for goal in goals:
+        if not goal.is_open:
+            updated.append(goal)
+            continue
+
+        if goal.goal_id in converged:
+            if goal.goal_id in blocked_goal_ids:
+                changed.append(f"{goal.goal_id}:converged_rejected(required_followup)")
+                updated.append(goal)
+                continue
+            if evidence_by_goal.get(goal.goal_id):
+                updated.append(
+                    goal.model_copy(
+                        update={
+                            "status": "converged",
+                            "closing_note": note,
+                        }
+                    )
+                )
+                changed.append(f"{goal.goal_id}:converged")
+                continue
+            changed.append(f"{goal.goal_id}:converged_rejected")
+
+        elif goal.goal_id in abandoned:
+            if attempts_by_goal.get(goal.goal_id, 0) > 0:
+                updated.append(
+                    goal.model_copy(
+                        update={
+                            "status": "abandoned",
+                            "closing_note": note,
+                        }
+                    )
+                )
+                changed.append(f"{goal.goal_id}:abandoned")
+                continue
+            changed.append(f"{goal.goal_id}:abandon_rejected(시도 부족)")
+
+        updated.append(goal)
+
+    return updated, changed
+
+
+def _with_events(events: list[PolicyEvent], decision: PlannerDecision) -> PlannerDecision:
+    return PlannerDecision(decision.update, (*events, *decision.events))
 
 
 _stalled = stalled

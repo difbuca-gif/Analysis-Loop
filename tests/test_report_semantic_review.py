@@ -9,13 +9,12 @@ import pytest
 
 from analysis_loop_v3.contracts import REPORT_REVIEW_CATEGORIES
 from analysis_loop_v3.llm.services import LLMCritic
-from analysis_loop_v3.orchestration.nodes import progress
-from analysis_loop_v3.orchestration.nodes.progress import _run_summary, _write_report
+from analysis_loop_v3.orchestration.nodes.reporting import run_summary, write_report
 from analysis_loop_v3.orchestration.nodes.review import commit_evidence, critique
 
 
 def report(statement, evidence_id):
-    return f'''## 원래 목표와 실행 상태
+    return f"""## 원래 목표와 실행 상태
 실험 결과를 검토했다.
 ## 핵심 결론
 {statement} [증거: {evidence_id}]
@@ -23,7 +22,7 @@ def report(statement, evidence_id):
 관찰 결과를 확인했다. [증거: {evidence_id}]
 ## 한계와 미완료 사항
 원인의 확정과 실제 조치에는 추가 확인이 필요하다.
-'''
+"""
 
 
 def assessment(evidence_id, *, category=None, quote=None):
@@ -31,12 +30,17 @@ def assessment(evidence_id, *, category=None, quote=None):
         "verdict": "reject" if category else "accept",
         "checked_categories": list(REPORT_REVIEW_CATEGORIES),
         "reviewed_evidence_ids": [evidence_id],
-        "findings": [] if category is None else [{
-            "category": category, "quote": quote,
-            "reason": "원본 결과는 기술 통계이며 이 주장을 입증하지 않는다.",
-            "suggested_revision": "결과가 보여주는 범위로 표현을 줄이고 추가 확인을 명시한다.",
-            "evidence_ids": [evidence_id],
-        }],
+        "findings": []
+        if category is None
+        else [
+            {
+                "category": category,
+                "quote": quote,
+                "reason": "원본 결과는 기술 통계이며 이 주장을 입증하지 않는다.",
+                "suggested_revision": "결과가 보여주는 범위로 표현을 줄이고 추가 확인을 명시한다.",
+                "evidence_ids": [evidence_id],
+            }
+        ],
     }
 
 
@@ -50,19 +54,22 @@ def report_harness(harness):
     return state, deps, record["evidence_id"]
 
 
-def write(state, deps):
-    ref, accepted = asyncio.run(_write_report(state, deps, _run_summary(state)))
+def write(state, deps, **kwargs):
+    ref, accepted = asyncio.run(write_report(state, deps, run_summary(state), **kwargs))
     return ref, accepted
 
 
-@pytest.mark.parametrize(("category", "statement"), [
-    ("evidence_support", "정산 오류가 확인됐다."),
-    ("causal_scope", "이 변수 때문에 정산 오류가 발생했다."),
-    ("metric_context", "평균이 확인됐으므로 인과 효과가 입증됐다."),
-    ("uncertainty", "모든 결과는 확실하며 추가 확인이 필요 없다."),
-    ("recommendations", "정산 로직 긴급 감사를 최우선으로 시행해야 한다."),
-    ("completion_status", "모든 원인과 분석 과제를 완전히 해결했다."),
-])
+@pytest.mark.parametrize(
+    ("category", "statement"),
+    [
+        ("evidence_support", "정산 오류가 확인됐다."),
+        ("causal_scope", "이 변수 때문에 정산 오류가 발생했다."),
+        ("metric_context", "평균이 확인됐으므로 인과 효과가 입증됐다."),
+        ("uncertainty", "모든 결과는 확실하며 추가 확인이 필요 없다."),
+        ("recommendations", "정산 로직 긴급 감사를 최우선으로 시행해야 한다."),
+        ("completion_status", "모든 원인과 분석 과제를 완전히 해결했다."),
+    ],
+)
 def test_reviewer_finding_blocks_report(report_harness, category, statement):
     # 탐지 성능 측정이 아니라, 각 의미 문제를 지적받았을 때 채택을 막는 경로다.
     state, deps, eid = report_harness
@@ -85,15 +92,29 @@ def test_qualified_recommendation_can_be_accepted(report_harness):
     ref, accepted = write(state, deps)
     assert accepted
     assert deps.artifacts.read_text(ref) == markdown
+    assert [e["event"] for e in deps.events if e["event"].startswith("REPORT_")] == [
+        "REPORT_VALIDATED",
+        "REPORT_REVIEWED",
+    ]
     assert ref.summary["semantic_review_passed"]
     assert ref.summary["report_sha256"] == hashlib.sha256(markdown.encode()).hexdigest()
     assert any(e["event"] == "REPORT_REVIEWED" and e["passed"] for e in deps.events)
 
 
-@pytest.mark.parametrize("defect", [
-    "missing_category", "duplicate_category", "unknown_evidence", "missing_evidence",
-    "unknown_quote", "accept_with_finding", "reject_without_finding", "empty_reason", "none",
-])
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing_category",
+        "duplicate_category",
+        "unknown_evidence",
+        "missing_evidence",
+        "unknown_quote",
+        "accept_with_finding",
+        "reject_without_finding",
+        "empty_reason",
+        "none",
+    ],
+)
 def test_incomplete_or_invalid_review_cannot_approve(report_harness, defect):
     state, deps, eid = report_harness
     statement = "정산 로직 긴급 감사를 최우선으로 시행해야 한다."
@@ -134,7 +155,9 @@ def test_structural_or_numeric_failure_never_calls_semantic_reviewer(report_harn
 
 def test_missing_result_blocks_even_non_numeric_claim(report_harness):
     state, deps, eid = report_harness
-    deps.critic.generate_report.return_value = report("관찰 결과를 토대로 추가 검토를 제안한다.", eid)
+    deps.critic.generate_report.return_value = report(
+        "관찰 결과를 토대로 추가 검토를 제안한다.", eid
+    )
     Path(state["candidate_ref"]["path"]).unlink()
     ref, accepted = write(state, deps)
     assert not accepted
@@ -145,7 +168,7 @@ def test_missing_result_blocks_even_non_numeric_claim(report_harness):
 
 
 @pytest.mark.parametrize("failure", ["missing_service", "transport", "timeout"])
-def test_reviewer_unavailable_is_not_approval(report_harness, monkeypatch, failure):
+def test_reviewer_unavailable_is_not_approval(report_harness, failure):
     state, deps, eid = report_harness
     deps.critic.generate_report.return_value = report("추가 검증이 필요하다.", eid)
     if failure == "missing_service":
@@ -153,11 +176,12 @@ def test_reviewer_unavailable_is_not_approval(report_harness, monkeypatch, failu
     elif failure == "transport":
         deps.critic.review_report.side_effect = RuntimeError("connection lost")
     else:
+
         async def wait_forever(**kwargs):
             await asyncio.Event().wait()
+
         deps.critic.review_report.side_effect = wait_forever
-        monkeypatch.setattr(progress, "DEFAULT_READ_TIMEOUT", 0.01)
-    ref, accepted = write(state, deps)
+    ref, accepted = write(state, deps, timeout_seconds=0.01 if failure == "timeout" else 600.0)
     assert not accepted
     assert deps.artifacts.read_json(ref)["report_review"]["status"] == "unreviewed"
 

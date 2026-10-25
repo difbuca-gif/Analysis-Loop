@@ -104,9 +104,28 @@ def test_validation_checks_facade_remains_available():
 
 def test_same_endpoint_check_accepts_codegen_without_client():
     cli_codegen = SimpleNamespace()
-    critic = SimpleNamespace(
-        client=SimpleNamespace(model="critic", base_url="http://localhost")
-    )
+    critic = SimpleNamespace(client=SimpleNamespace(model="critic", base_url="http://localhost"))
 
     assert _same_endpoint_model(cli_codegen, critic) is False
     assert describe_services(None, cli_codegen, critic)["codegen"].endswith(":local")
+
+
+def test_factory_supports_disabled_services(monkeypatch):
+    from analysis_loop_v3.llm import services
+
+    monkeypatch.setattr(services, "resolve_provider", lambda role: "none")
+    monkeypatch.setattr(services, "build_role_client", lambda role: None)
+    assert services.build_services() == (None, None, None, [])
+
+
+def test_factory_supports_cli_codegen_without_shared_failure_state(monkeypatch):
+    from analysis_loop_v3.llm import services
+    from analysis_loop_v3.llm.agy_codegen import AgyCodegen
+
+    monkeypatch.setattr(services, "resolve_provider", lambda role: "agy")
+    monkeypatch.setattr(services, "build_role_client", lambda role: None)
+    planner, codegen, critic, clients = services.build_services()
+    assert isinstance(codegen, AgyCodegen)
+    assert planner is critic is None
+    assert clients == []
+    assert not hasattr(codegen, "last_error")

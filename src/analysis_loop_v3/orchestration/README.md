@@ -51,24 +51,21 @@ END
 |---|---|
 | `nodes/planning.py` | Profile, SubGoal 분해, Planner 호출 orchestration |
 | `nodes/planner_context.py` | Planner에 전달할 Evidence 선택 |
-| `nodes/planner_decision.py` | Planner 판정과 이벤트 데이터를 반환하는 순수 정책 |
-| `nodes/goal_policy.py` | SubGoal converge/abandon 적용 규칙 |
+| `nodes/planner_decision.py` | Goal 종료 규칙, Planner 판정과 이벤트 데이터를 반환하는 순수 정책 |
 | `nodes/intent_policy.py` | Agenda/중복/재사용 Intent 정책 |
 | `nodes/program.py` | 프로그램 cache 조회와 Codegen 호출 |
 | `nodes/code_validation.py` | 코드/Manifest 정적 검증 |
 | `nodes/running.py` | Sandbox 실행과 Result Artifact 생성 |
 | `nodes/result_validation.py` | Result 계약 검증 |
-| `nodes/review.py` | Critic 호출, Evidence commit/reject orchestration |
+| `nodes/review.py` | Critic 호출, Evidence commit/reject, 거부 사유와 반복 오류 분류 |
 | `nodes/review_evidence.py` | Evidence 생성, cache, relation 규칙 |
 | `nodes/review_agenda.py` | Evidence 채택 후 Agenda lifecycle |
-| `nodes/rejection_policy.py` | 거부 사유와 반복 오류 분류 |
-| `nodes/progress.py` | 계속/종료 및 Goal 확장 orchestration |
-| `nodes/progress_policy.py` | 종료/contradiction 복구 정책 |
+| `nodes/progress.py` | 계속/종료, Goal 확장, 모순 Agenda 복구 정책 |
 | `nodes/reporting.py` | 보고서 생성, 구조·수치 검증, semantic review |
 
 ## 변경 규칙
 
-### 1. Node는 orchestration만 한다
+### 1. Node 함수는 실행 흐름을 보여준다
 
 Node 함수에서는 다음 순서가 바로 보여야 한다.
 
@@ -79,7 +76,7 @@ State 읽기
 → partial State update 반환
 ```
 
-복잡한 순수 규칙은 `*_policy.py` 또는 목적별 helper로 이동한다.
+판단 규칙은 같은 파일의 이름 있는 helper로 구분한다. 별도의 책임이 충분히 크거나 여러 곳에서 공유될 때만 독립 모듈로 둔다.
 
 ### 2. 라우팅은 `routes.py`에 둔다
 
@@ -146,3 +143,13 @@ Dataset, 생성 코드, 실행 결과, Figure, Report는 ArtifactStore에 저장
 `as_node=START`로 기록하면 실행 위치가 `profile_data`로 바뀌므로 사용하지 않는다.
 현재의 직렬 그래프에서는 마지막 완료 노드를 추론할 수 있다. 병렬 분기를 추가한다면 재개 위치 보존 정책도 함께 검토해야 한다.
 완료된 그래프는 예산을 늘려도 다시 시작하지 않는다.
+
+## 코드 탐색과 변경 규칙
+
+- 그래프는 `nodes`의 안정적인 이름을 사용하고, `nodes/__init__.py`는 실제 구현 모듈에서 직접 가져온다.
+- `program.validate_code`, `running.validate_result`, `progress.finalize` 및 보고서 private wrapper는 기존 호출부를 위한 호환 경로다. 새 내부 코드와 일반 테스트는 실제 구현을 사용한다.
+- 주요 Node를 파일 앞쪽에, 같은 기능의 helper를 뒤쪽에 둔다. 작은 정책마다 파일이나 입력 모델을 만들지 않는다.
+- Goal 판정은 `planner_decision.py`, 시도 거부는 `review.py`, 진행/종료는 `progress.py`에서 함께 읽는다.
+- 판정 조건과 카운터의 의미는 구현 가까이에 설명한다. `routes.py`의 정적/런타임 재시도 상한은 비교 연산자를 임의로 통일하지 않는다.
+- 보고서 테스트는 `reporting.write_report(..., timeout_seconds=...)`로 시간 제한을 전달한다.
+- 서비스 factory는 역할별 Protocol을 반환한다. 선택적인 실패 정보는 `AgyCodegen`의 동시 호출 특성을 보존하기 위해 기존 조회 방식을 유지한다.

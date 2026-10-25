@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 from typing import Any
 
-from ...contracts import ArtifactKind, EvidenceRecord, RunStatus, StopCode
+from ...contracts import ArtifactKind, ArtifactRef, EvidenceRecord, RunStatus, StopCode
 from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...report_validation import validate_report, validate_semantic_review
 from ...runtime import RuntimeDeps
@@ -25,55 +25,137 @@ from ..node_updates import FinalizeUpdate
 from ._shared import _event
 
 
-def reportable_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
-    """현재 데이터에서 사용 가능하고 superseded되지 않은 Evidence."""
-    return current_evidence(state)
+async def finalize(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    *,
+    timeout_seconds: float = DEFAULT_READ_TIMEOUT,
+) -> FinalizeUpdate:
+    """최종 보고서 Artifact와 종료 메타데이터를 만든다."""
+    summary = run_summary(state)
+    ref, is_markdown = await write_report(
+        state,
+        deps,
+        summary,
+        timeout_seconds=timeout_seconds,
+    )
 
-
-def run_summary(state: AnalysisGraphState) -> dict[str, Any]:
-    """보고서 생성 입력과 JSON fallback에 공통으로 사용할 실행 요약."""
-    evidence = state.get("evidence") or []
-    reportable = reportable_evidence(state)
+    _event(
+        state,
+        deps,
+        "FINALIZED",
+        {
+            "evidence_count": summary["evidence_count"],
+            "has_md_report": is_markdown,
+        },
+    )
     return {
-        "run_id": state.get("run_id"),
-        "objective": state.get("objective"),
-        "status": state.get("status"),
-        "stop_code": state.get("stop_code"),
-        "iterations": state.get("iteration", 0),
-        "evidence_count": len(evidence),
-        "rejected_count": len(state.get("rejected") or []),
-        "agenda": state.get("agenda") or [],
-        "pending_agenda": [item.model_dump(mode="json") for item in pending_agenda_tasks(state)],
-        "evidence_relations": [
-            item.model_dump(mode="json") for item in get_evidence_relations(state)
-        ],
-        "active_evidence_ids": [item.evidence_id for item in reportable],
-        "incomplete_goal_ids": [
-            goal.goal_id for goal in get_sub_goals(state) if goal.status != "converged"
-        ],
-        "pending_task_ids": [task.task_id for task in pending_agenda_tasks(state)],
-        "unresolved_contradictions": [list(pair) for pair in unresolved_contradictions(state)],
-        "stop_reason": state.get("stop_reason"),
-        "goals": [
-            {
-                "goal_id": goal.goal_id,
-                "question": goal.question,
-                "status": goal.status,
-                "evidence_count": len(goal.evidence_ids),
-                "closing_note": goal.closing_note,
-            }
-            for goal in get_sub_goals(state)
-        ],
-        "failure_issues": state.get("validation_errors") or [],
-        "claims": [
-            {
-                "evidence_id": item["evidence_id"],
-                "question": item["question"],
-                "claim": item["claim"],
-            }
-            for item in evidence
-        ],
+        "report_ref": ref.model_dump(mode="json"),
+        "status": state.get("status") or RunStatus.COMPLETED.value,
+        "stop_code": state.get("stop_code") or StopCode.UNKNOWN.value,
+        "stop_reason": state.get("stop_reason") or "완료",
     }
+
+
+async def write_report(
+    state: AnalysisGraphState,
+    deps: RuntimeDeps,
+    summary: dict[str, Any],
+    *,
+    timeout_seconds: float = DEFAULT_READ_TIMEOUT,
+) -> tuple[ArtifactRef, bool]:
+    """검증된 Markdown을 채택하고 실패하면 구조화 JSON으로 fallback한다."""
+    all_evidence = get_evidence(state)
+    reportable = reportable_evidence(state)
+    numeric_support: dict[str, list[float]] = {}
+    original_results: dict[str, Any] = {}
+
+    for item in reportable:
+        try:
+            payload = deps.artifacts.read_json(item.result_ref)
+        except (OSError, ValueError, TypeError):
+            numeric_support[item.evidence_id] = []
+            continue
+        original_results[item.evidence_id] = payload
+        numeric_support[item.evidence_id] = _collect_numeric_values(payload)
+
+    budget_exhausted = state.get("stop_code") == StopCode.BUDGET_EXHAUSTED.value
+    critic_unavailable = (
+        state.get("stop_code") == StopCode.SERVICE_UNAVAILABLE.value
+        and service_failure_action(getattr(deps.critic, "last_failure_kind", None)) == "stop_run"
+    )
+    can_generate_report = (
+        deps.critic is not None and not budget_exhausted and not critic_unavailable
+    )
+    report_md = None
+    if can_generate_report and deps.critic is not None:
+        report_md = await deps.critic.generate_report(
+            run_summary=summary,
+            evidence=[item.model_dump(mode="json") for item in reportable],
+            rejected=state.get("rejected") or [],
+            timeout_seconds=timeout_seconds,
+        )
+
+    if report_md is None and deps.critic is not None:
+        kind = getattr(deps.critic, "last_failure_kind", None)
+        if kind and service_failure_action(kind, stage="report") == "fallback_report":
+            _event(state, deps, "REPORT_FALLBACK", {"kind": kind})
+
+    if not report_md:
+        return _save_json_report(deps, summary, evidence_count=len(reportable)), False
+
+    validation = validate_report(
+        report_md,
+        evidence=all_evidence,
+        relations=get_evidence_relations(state),
+        allowed_evidence_ids={item.evidence_id for item in reportable},
+        numeric_support=numeric_support,
+        stop_code=state.get("stop_code"),
+        incomplete_goal_ids=summary["incomplete_goal_ids"],
+        pending_task_ids=summary["pending_task_ids"],
+        unresolved_contradictions=[tuple(pair) for pair in summary["unresolved_contradictions"]],
+    )
+    _event(
+        state,
+        deps,
+        "REPORT_VALIDATED",
+        {
+            "passed": validation["passed"],
+            "errors": validation["errors"],
+            "warnings": validation["warnings"],
+            "citation_count": validation["citation_count"],
+        },
+    )
+    if not validation["passed"]:
+        summary = {**summary, "report_validation": validation}
+        return _save_json_report(deps, summary, evidence_count=len(reportable)), False
+
+    semantic = await review_report(
+        state,
+        deps,
+        markdown=report_md,
+        summary=summary,
+        evidence=reportable,
+        cited_ids=set(validation["cited_evidence_ids"]),
+        results=original_results,
+        timeout_seconds=timeout_seconds,
+    )
+    if not semantic["passed"]:
+        summary = {**summary, "report_review": semantic, "report_validation": validation}
+        return _save_json_report(deps, summary, evidence_count=len(reportable)), False
+
+    ref = deps.artifacts.put_text(
+        report_md,
+        kind=ArtifactKind.REPORT,
+        suffix=".md",
+        summary={
+            "evidence_count": len(reportable),
+            "citation_count": validation["citation_count"],
+            "semantic_review_passed": True,
+            "report_sha256": semantic["report_sha256"],
+        },
+    )
+    return ref, True
 
 
 async def review_report(
@@ -137,6 +219,57 @@ async def review_report(
     return outcome
 
 
+def run_summary(state: AnalysisGraphState) -> dict[str, Any]:
+    """보고서 생성 입력과 JSON fallback에 공통으로 사용할 실행 요약."""
+    evidence = state.get("evidence") or []
+    reportable = reportable_evidence(state)
+    return {
+        "run_id": state.get("run_id"),
+        "objective": state.get("objective"),
+        "status": state.get("status"),
+        "stop_code": state.get("stop_code"),
+        "iterations": state.get("iteration", 0),
+        "evidence_count": len(evidence),
+        "rejected_count": len(state.get("rejected") or []),
+        "agenda": state.get("agenda") or [],
+        "pending_agenda": [item.model_dump(mode="json") for item in pending_agenda_tasks(state)],
+        "evidence_relations": [
+            item.model_dump(mode="json") for item in get_evidence_relations(state)
+        ],
+        "active_evidence_ids": [item.evidence_id for item in reportable],
+        "incomplete_goal_ids": [
+            goal.goal_id for goal in get_sub_goals(state) if goal.status != "converged"
+        ],
+        "pending_task_ids": [task.task_id for task in pending_agenda_tasks(state)],
+        "unresolved_contradictions": [list(pair) for pair in unresolved_contradictions(state)],
+        "stop_reason": state.get("stop_reason"),
+        "goals": [
+            {
+                "goal_id": goal.goal_id,
+                "question": goal.question,
+                "status": goal.status,
+                "evidence_count": len(goal.evidence_ids),
+                "closing_note": goal.closing_note,
+            }
+            for goal in get_sub_goals(state)
+        ],
+        "failure_issues": state.get("validation_errors") or [],
+        "claims": [
+            {
+                "evidence_id": item["evidence_id"],
+                "question": item["question"],
+                "claim": item["claim"],
+            }
+            for item in evidence
+        ],
+    }
+
+
+def reportable_evidence(state: AnalysisGraphState) -> list[EvidenceRecord]:
+    """현재 데이터에서 사용 가능하고 superseded되지 않은 Evidence."""
+    return current_evidence(state)
+
+
 def _collect_numeric_values(value: Any) -> list[float]:
     """원본 Result의 numeric leaf를 재귀적으로 모은다."""
     numbers: list[float] = []
@@ -153,142 +286,18 @@ def _collect_numeric_values(value: Any) -> list[float]:
     return numbers
 
 
-async def write_report(
-    state: AnalysisGraphState,
+def _save_json_report(
     deps: RuntimeDeps,
     summary: dict[str, Any],
     *,
-    timeout_seconds: float = DEFAULT_READ_TIMEOUT,
-) -> tuple[Any, bool]:
-    """검증된 Markdown을 채택하고 실패하면 구조화 JSON으로 fallback한다."""
-    all_evidence = get_evidence(state)
-    reportable = reportable_evidence(state)
-    numeric_support: dict[str, list[float]] = {}
-    original_results: dict[str, Any] = {}
-
-    for item in reportable:
-        try:
-            payload = deps.artifacts.read_json(item.result_ref)
-        except (OSError, ValueError, TypeError):
-            numeric_support[item.evidence_id] = []
-            continue
-        original_results[item.evidence_id] = payload
-        numeric_support[item.evidence_id] = _collect_numeric_values(payload)
-
-    report_md = None
-    if (
-        deps.critic is not None
-        and state.get("stop_code") != StopCode.BUDGET_EXHAUSTED.value
-        and not (
-            state.get("stop_code") == StopCode.SERVICE_UNAVAILABLE.value
-            and service_failure_action(getattr(deps.critic, "last_failure_kind", None))
-            == "stop_run"
-        )
-    ):
-        report_md = await deps.critic.generate_report(
-            run_summary=summary,
-            evidence=[item.model_dump(mode="json") for item in reportable],
-            rejected=state.get("rejected") or [],
-            timeout_seconds=timeout_seconds,
-        )
-
-    if report_md is None and deps.critic is not None:
-        kind = getattr(deps.critic, "last_failure_kind", None)
-        if kind and service_failure_action(kind, stage="report") == "fallback_report":
-            _event(state, deps, "REPORT_FALLBACK", {"kind": kind})
-
-    if report_md:
-        validation = validate_report(
-            report_md,
-            evidence=all_evidence,
-            relations=get_evidence_relations(state),
-            allowed_evidence_ids={item.evidence_id for item in reportable},
-            numeric_support=numeric_support,
-            stop_code=state.get("stop_code"),
-            incomplete_goal_ids=summary["incomplete_goal_ids"],
-            pending_task_ids=summary["pending_task_ids"],
-            unresolved_contradictions=[
-                tuple(pair) for pair in summary["unresolved_contradictions"]
-            ],
-        )
-        _event(
-            state,
-            deps,
-            "REPORT_VALIDATED",
-            {
-                "passed": validation["passed"],
-                "errors": validation["errors"],
-                "warnings": validation["warnings"],
-                "citation_count": validation["citation_count"],
-            },
-        )
-
-        if validation["passed"]:
-            semantic = await review_report(
-                state,
-                deps,
-                markdown=report_md,
-                summary=summary,
-                evidence=reportable,
-                cited_ids=set(validation["cited_evidence_ids"]),
-                results=original_results,
-                timeout_seconds=timeout_seconds,
-            )
-            if semantic["passed"]:
-                ref = deps.artifacts.put_text(
-                    report_md,
-                    kind=ArtifactKind.REPORT,
-                    suffix=".md",
-                    summary={
-                        "evidence_count": len(reportable),
-                        "citation_count": validation["citation_count"],
-                        "semantic_review_passed": True,
-                        "report_sha256": semantic["report_sha256"],
-                    },
-                )
-                return ref, True
-            summary = {**summary, "report_review": semantic}
-
-        summary = {**summary, "report_validation": validation}
-
-    ref = deps.artifacts.put_json(
+    evidence_count: int,
+) -> ArtifactRef:
+    """생성하지 못하거나 검증에 실패한 보고서는 JSON 요약으로 저장한다."""
+    return deps.artifacts.put_json(
         summary,
         kind=ArtifactKind.REPORT,
-        summary={"evidence_count": len(reportable)},
+        summary={"evidence_count": evidence_count},
     )
-    return ref, False
-
-
-async def finalize(
-    state: AnalysisGraphState,
-    deps: RuntimeDeps,
-    *,
-    timeout_seconds: float = DEFAULT_READ_TIMEOUT,
-) -> FinalizeUpdate:
-    """최종 보고서 Artifact와 종료 메타데이터를 만든다."""
-    summary = run_summary(state)
-    ref, is_markdown = await write_report(
-        state,
-        deps,
-        summary,
-        timeout_seconds=timeout_seconds,
-    )
-
-    _event(
-        state,
-        deps,
-        "FINALIZED",
-        {
-            "evidence_count": summary["evidence_count"],
-            "has_md_report": is_markdown,
-        },
-    )
-    return {
-        "report_ref": ref.model_dump(mode="json"),
-        "status": state.get("status") or RunStatus.COMPLETED.value,
-        "stop_code": state.get("stop_code") or StopCode.UNKNOWN.value,
-        "stop_reason": state.get("stop_reason") or "완료",
-    }
 
 
 _reportable_evidence = reportable_evidence

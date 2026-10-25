@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...contracts import CriticReview, FindingDigest, RunStatus, StopCode
+from ...contracts import CriticReview, FindingDigest, LoopIssue, ResearchIntent, RunStatus, StopCode
 from ...llm.client import DEFAULT_READ_TIMEOUT
 from ...runtime import RuntimeDeps
 from ...state import (
@@ -26,8 +26,7 @@ from ...validation.checks import validate_critic_references
 from ...validation.numeric import bind_review_to_result
 from ..failure_policy import service_failure_action
 from ..node_updates import CritiqueUpdate, EvidenceCommitUpdate, RejectionUpdate
-from ._shared import _event, _load_generated
-from .rejection_policy import _rejection_reasons, _stuck_issue
+from ._shared import _event, _load_generated, is_stuck
 from .review_agenda import _agenda_after_commit
 from .review_evidence import (
     _build_evidence,
@@ -272,7 +271,7 @@ async def reject_attempt(
     """실패/거부된 회차를 기록하고 재계획 가능한 상태로 복원한다."""
     intent = get_intent(state)
     review = state.get("review") or {}
-    reasons = _rejection_reasons(state, review)
+    reasons = rejection_reasons(state, review)
 
     payload: RejectionUpdate = {"intent": None}
     if intent is not None and intent.task_id:
@@ -314,10 +313,40 @@ async def reject_attempt(
             }
         ]
 
-    if issue := _stuck_issue(state, intent, reasons):
+    if issue := stuck_issue(state, intent, reasons):
         payload["issues"] = [issue.model_dump(mode="json")]
         payload["error_streak"] = {}
         _event(state, deps, "STUCK_ON_ERROR", issue.model_dump(mode="json"))
 
     _event(state, deps, "ATTEMPT_REJECTED", {"reasons": reasons[:3]})
     return payload
+
+
+def rejection_reasons(
+    state: AnalysisGraphState,
+    review: dict[str, Any],
+) -> list[str]:
+    """검증 오류를 우선하고, 없으면 Critic 사유를 반환한다."""
+    reasons = [str(error.get("message", error)) for error in state.get("validation_errors") or []]
+    if reasons:
+        return reasons
+    return [str(reason) for reason in review.get("reasons") or []]
+
+
+def stuck_issue(
+    state: AnalysisGraphState,
+    intent: ResearchIntent | None,
+    reasons: list[str],
+) -> LoopIssue | None:
+    """동일 오류 반복으로 중단된 회차를 운영 신호로 변환한다."""
+    if not is_stuck(state):
+        return None
+    streak = state.get("error_streak") or {}
+    return LoopIssue(
+        label=str(streak.get("key") or "unknown"),
+        count=int(streak.get("count", 0)),
+        iteration=int(state.get("iteration", 0)),
+        intent_id=intent.intent_id if intent else None,
+        question=intent.question if intent else "",
+        messages=reasons[:3],
+    )

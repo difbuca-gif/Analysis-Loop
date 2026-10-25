@@ -14,7 +14,16 @@ def agenda_after_commit(
     review: CriticReview,
     evidence: EvidenceRecord,
 ) -> tuple[list[AgendaTask], list[AgendaTask], str | None]:
-    """선택 작업 종료 후 후속 질문·재검증·모순 해결 작업을 갱신한다."""
+    """채택된 Evidence로 기존 작업을 판정한 뒤 새 작업을 추가한다.
+
+    - follow_up: 선택된 작업이면 완료한다.
+    - resolve_contradiction: 출처가 supersedes/reconciles로 해소되면 완료한다.
+      이 관계는 선택하지 않은 모순 작업도 해결할 수 있다.
+    - revalidate: 선택된 작업의 모든 출처를 명시적으로 재검증하고,
+      방법·프로토콜·데이터·변환 중 조건 차이가 있어야 완료한다.
+    - 선택한 모순/재검증 작업이 해소되지 않았으면 pending으로 돌린다.
+    기존 작업 판정 후 미해결 질문·재검증 요청·모순에 해당하는 작업을 중복 없이 추가한다.
+    """
     updated: list[AgendaTask] = []
     completed_id: str | None = None
 
@@ -22,12 +31,9 @@ def agenda_after_commit(
     reconciled = set(review.reconciles)
     for item in get_agenda(state):
         selected = item.task_id == intent.task_id
-        contradiction_resolved = (
-            item.kind == "resolve_contradiction"
-            and (
-                bool(superseded.intersection(item.source_evidence_ids))
-                or set(item.source_evidence_ids).issubset(reconciled)
-            )
+        contradiction_resolved = item.kind == "resolve_contradiction" and (
+            bool(superseded.intersection(item.source_evidence_ids))
+            or set(item.source_evidence_ids).issubset(reconciled)
         )
         revalidation_changes = (
             revalidation_changed_conditions(
@@ -45,16 +51,20 @@ def agenda_after_commit(
             and bool(revalidation_changes)
         )
         should_complete = (
-            selected and item.kind == "follow_up"
-        ) or contradiction_resolved or revalidation_resolved
+            (selected and item.kind == "follow_up")
+            or contradiction_resolved
+            or revalidation_resolved
+        )
 
         if should_complete and item.status != "completed":
-            item = item.model_copy(update={
-                "status": "completed",
-                "selected_intent_id": intent.intent_id,
-                "completion_evidence_id": evidence.evidence_id,
-                "resolution_reason": review.claim.strip(),
-            })
+            item = item.model_copy(
+                update={
+                    "status": "completed",
+                    "selected_intent_id": intent.intent_id,
+                    "completion_evidence_id": evidence.evidence_id,
+                    "resolution_reason": review.claim.strip(),
+                }
+            )
             if selected:
                 completed_id = item.task_id
         elif selected and item.kind in {"resolve_contradiction", "revalidate"}:
@@ -67,11 +77,13 @@ def agenda_after_commit(
                 )
             else:
                 reason = "accepted evidence did not explicitly revalidate source evidence"
-            item = item.model_copy(update={
-                "status": "pending",
-                "selected_intent_id": None,
-                "resolution_reason": reason,
-            })
+            item = item.model_copy(
+                update={
+                    "status": "pending",
+                    "selected_intent_id": None,
+                    "resolution_reason": reason,
+                }
+            )
         updated.append(item)
 
     def normalized(text: str) -> str:
@@ -129,9 +141,7 @@ def agenda_after_commit(
             kind="revalidate",
             goal_id=intent.goal_id,
             question=question,
-            rationale=(
-                "Critic이 현재 Evidence의 신뢰도·범위를 독립 조건에서 다시 확인하도록 지정"
-            ),
+            rationale=("Critic이 현재 Evidence의 신뢰도·범위를 독립 조건에서 다시 확인하도록 지정"),
             priority=80,
             source_evidence_ids=[evidence.evidence_id],
         )

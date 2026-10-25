@@ -7,8 +7,10 @@ Planner/Codegen/Critic 구현은 역할별 모듈에 분리한다. 기존
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
+from ..runtime_protocols import CodegenService, CriticService, PlannerService
 from .client import OpenAICompatClient
 from .codegen_service import LLMCodegen
 from .critic_service import LLMCritic
@@ -31,22 +33,26 @@ from .service_common import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_ServiceT = TypeVar("_ServiceT")
 
 
 def build_services(
     *,
     memory: AnalysisMemory | None = None,
-) -> tuple[Any, Any, Any, list[OpenAICompatClient]]:
+) -> tuple[
+    PlannerService | None, CodegenService | None, CriticService | None, list[OpenAICompatClient]
+]:
     """Planner/Codegen/Critic 서비스와 종료 대상 client를 구성한다."""
     clients: list[OpenAICompatClient] = []
 
-    def wrap(role: str, factory):
+    def wrap(role: str, factory: Callable[[OpenAICompatClient], _ServiceT]) -> _ServiceT | None:
         client = build_role_client(role)
         if client is None:
             return None
         clients.append(client)
         return factory(client)
 
+    codegen: CodegenService | None
     if resolve_provider("CODEGEN") == "agy":
         from .agy_codegen import AgyCodegen
 
