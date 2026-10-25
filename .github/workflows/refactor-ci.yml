@@ -1,6 +1,7 @@
 name: Refactor CI
 
 # Branch-only safety net for the maintainability refactor. Do not merge automatically.
+# Trigger revision: contracts/llm/validation split included.
 on:
   push:
     branches:
