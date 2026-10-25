@@ -11,6 +11,7 @@ from ...contracts import ArtifactKind
 from ...data.profiling import load_dataframe
 from ...runtime import RuntimeDeps
 from ...state import AnalysisGraphState, get_intent, get_ref
+from ..node_updates import InspectionUpdate
 from ._shared import _event
 
 
@@ -22,7 +23,7 @@ def _finite_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-async def inspect_data(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, Any]:
+async def inspect_data(state: AnalysisGraphState, deps: RuntimeDeps) -> InspectionUpdate:
     """선택 column의 missing/unique/numeric summary 생성. raw value는 State에 미저장."""
     intent = get_intent(state)
     dataset = get_ref(state, "dataset_ref")
@@ -72,11 +73,16 @@ async def inspect_data(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str
         "columns": columns,
         "inspection_ref": ref.model_dump(mode="json"),
     }
-    _event(state, deps, "DATA_INSPECTED", {
-        "intent_id": intent.intent_id,
-        "columns": columns,
-        "inspection_id": ref.artifact_id,
-    })
+    _event(
+        state,
+        deps,
+        "DATA_INSPECTED",
+        {
+            "intent_id": intent.intent_id,
+            "columns": columns,
+            "inspection_id": ref.artifact_id,
+        },
+    )
     return {
         "inspection_ref": ref.model_dump(mode="json"),
         "inspection_summary": summary,

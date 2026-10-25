@@ -105,3 +105,16 @@ class FinalizeUpdate(TypedDict, total=False):
     status: str
     stop_code: str
     stop_reason: str
+
+
+class InspectionUpdate(TypedDict, total=False):
+    inspection_ref: dict[str, Any]
+    inspection_summary: dict[str, Any]
+    inspection_history: list[dict[str, Any]]
+    intent: None
+
+
+class EvidenceLookupUpdate(TypedDict, total=False):
+    evidence_lookup_summary: list[dict[str, Any]]
+    evidence_lookup_history: list[dict[str, Any]]
+    intent: None

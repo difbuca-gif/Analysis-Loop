@@ -139,3 +139,10 @@ Dataset, 생성 코드, 실행 결과, Figure, Report는 ArtifactStore에 저장
 
 `mypy`는 `pyproject.toml`의 `files`에 열거한 orchestration 경계를 검사한다.
 노드 partial update와 종료/회차 초기화 update를 TypedDict로 명시하며, CI에서 반환 필드와 값 타입을 검사한다. 전체 저장소의 타입 검사가 완료됐다는 의미는 아니다.
+
+## 예산 연장과 재개
+
+`AnalysisService.resume()`의 예산 갱신은 마지막 완료 노드에서의 State update로 기록한다.
+`as_node=START`로 기록하면 실행 위치가 `profile_data`로 바뀌므로 사용하지 않는다.
+현재의 직렬 그래프에서는 마지막 완료 노드를 추론할 수 있다. 병렬 분기를 추가한다면 재개 위치 보존 정책도 함께 검토해야 한다.
+완료된 그래프는 예산을 늘려도 다시 시작하지 않는다.
