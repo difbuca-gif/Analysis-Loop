@@ -16,7 +16,6 @@ from typing import Any
 from uuid import uuid4
 
 from langgraph.errors import GraphRecursionError
-from langgraph.graph import START
 
 from .contracts import (
     SCHEMA_VERSION,
@@ -32,6 +31,7 @@ from .orchestration.nodes import finalize
 from .runtime import RuntimeDeps
 from .state import new_state, remaining_seconds, terminal_update
 
+
 @dataclass(slots=True)
 class RunHandle:
     run_id: str
@@ -39,11 +39,13 @@ class RunHandle:
     status: str
     state: dict[str, Any]
 
+
 def _thread_config(thread_id: str) -> dict[str, Any]:
     return {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": RECURSION_LIMIT,
     }
+
 
 @contextlib.asynccontextmanager
 async def open_checkpointer(db_path: Path | str) -> AsyncIterator[Any]:
@@ -54,6 +56,7 @@ async def open_checkpointer(db_path: Path | str) -> AsyncIterator[Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
         yield saver
+
 
 class AnalysisService:
     def __init__(self, deps: RuntimeDeps, checkpointer: Any) -> None:
@@ -128,11 +131,12 @@ class AnalysisService:
         if time_budget_seconds is not None:
             if time_budget_seconds <= 0:
                 raise ValueError("time_budget_seconds는 0보다 커야 한다")
-            # deadline_at 갱신은 START state로 기록
+            # as_node를 생략하면 마지막 완료 노드의 update로 기록된다.
+            # START를 지정하면 다음 실행 위치가 profile_data로 되돌아간다.
+            # 현재 그래프는 직렬 흐름이므로 마지막 완료 노드가 모호하지 않다.
             await self.graph.aupdate_state(
                 _thread_config(thread_id),
                 {"deadline_at": time.time() + time_budget_seconds},
-                as_node=START,
             )
         return await self._drive(None, thread_id=thread_id)
 

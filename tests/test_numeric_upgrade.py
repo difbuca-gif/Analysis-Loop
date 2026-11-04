@@ -16,7 +16,7 @@ def test_pre_patch_checkpoint_cannot_resume(harness):
         await service.graph.aupdate_state(
             {"configurable": {"thread_id": "legacy-run"}},
             {**state, "run_id": "legacy-run", "schema_version": 8},
-            as_node="critique",
+            as_node="plan_intent",
         )
         with pytest.raises(ValueError, match="지원하지 않는 state schema"):
             await service.resume(thread_id="legacy-run")

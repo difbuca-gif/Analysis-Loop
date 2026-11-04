@@ -1,0 +1,44 @@
+name: Refactor CI
+
+# Branch-only safety net for the maintainability refactor. Do not merge automatically.
+on:
+  push:
+    branches:
+      - refactor/maintainability
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,api]"
+
+      - name: Compile
+        run: python -m compileall -q src tests
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Type check orchestration
+        run: mypy
+
+      - name: Test
+        run: pytest -q

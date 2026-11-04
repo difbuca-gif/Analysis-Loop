@@ -1,0 +1,174 @@
+# Orchestration 구조
+
+이 디렉터리는 **분석 실행 흐름**만 관리한다. 기능을 추가할 때 Node 하나에 정책·검증·저장 로직을 다시 몰아넣지 않는다.
+
+## 실행 흐름
+
+메인 그래프는 계획·비코드 작업·목표 진행·종료를 담당한다. 코드 계산 경로는
+`execution` 서브그래프에서 `lookup_program → generate_code → validate_code
+→ execute → validate_result → critique → commit_evidence/reject_attempt`로 진행한다.
+정적/런타임 실패 시 기존 재시도 정책을 유지한다. 서브그래프의 Evidence 누적
+변경분만 `apply_execution_delta`에서 부모 State에 반영한다.
+
+**주의:** 이전 구조에서 실행 도중 저장된 체크포인트의 노드 경로가 달라진다.
+배포 전에 기존 실행을 완료하거나 별도 재개 마이그레이션을 검증해야 한다.
+과거 Evidence와 Artifact를 삭제하지 않는다.
+
+```text
+Main Graph
+  START → profile_data → decompose_objective → plan_intent
+                                        │
+                     ┌──────────────────┴─────────────────┐
+                     │                                    │
+       reuse / inspect / lookup             execution (Subgraph)
+                     │                                    │
+                     │                          lookup_program
+                     │                               ↓
+                     │                          generate_code
+                     │                               ↓
+                     │                          validate_code
+                     │                               ↓
+                     │                             execute
+                     │                               ↓
+                     │                         validate_result
+                     │                               ↓
+                     │                             critique
+                     │                               ↓
+                     │                      commit / reject attempt
+                     │                               ↓
+                     │                       export_execution_delta
+                     │                               ↓
+                     │                       apply_execution_delta
+                     └──────────────────┬─────────────────┘
+                                        ↓
+                                  assess_progress
+                                        ↓
+                         plan_intent / expand_goals / finalize
+                                        ↓
+                                       END
+```
+
+## 파일 책임
+
+### 그래프
+
+| 파일 | 책임 |
+|---|---|
+| `graph.py` | Main Graph와 실행 서브그래프 연결 |
+| `execution_graph.py` | 실행·검증·Evidence 채택과 상태 변경분 전달 |
+| `routes.py` | State를 읽고 다음 Node를 선택하는 라우팅 정책 |
+| `node_updates.py` | Node별 partial State update 타입 |
+| `failure_policy.py` | 외부 서비스 실패의 종료·시도 거부·보고서 대체 정책 |
+
+### Node
+
+| 파일 | 책임 |
+|---|---|
+| `nodes/planning.py` | Profile, SubGoal 분해, Planner 호출 orchestration |
+| `nodes/planner_context.py` | Planner에 전달할 Evidence 선택 |
+| `nodes/planner_decision.py` | Goal 종료 규칙, Planner 판정과 이벤트 데이터를 반환하는 순수 정책 |
+| `nodes/intent_policy.py` | Agenda/중복/재사용 Intent 정책 |
+| `nodes/program.py` | 프로그램 cache 조회와 Codegen 호출 |
+| `nodes/code_validation.py` | 코드/Manifest 정적 검증 |
+| `nodes/running.py` | Sandbox 실행과 Result Artifact 생성 |
+| `nodes/result_validation.py` | Result 계약 검증 |
+| `nodes/review.py` | Critic 호출, Evidence commit/reject, 거부 사유와 반복 오류 분류 |
+| `nodes/review_evidence.py` | Evidence 생성, cache, relation 규칙 |
+| `nodes/review_agenda.py` | Evidence 채택 후 Agenda lifecycle |
+| `nodes/progress.py` | 계속/종료, Goal 확장, 모순 Agenda 복구 정책 |
+| `nodes/reporting.py` | 보고서 생성, 구조·수치 검증, semantic review |
+
+## 변경 규칙
+
+### 1. Node 함수는 실행 흐름을 보여준다
+
+Node 함수에서는 다음 순서가 바로 보여야 한다.
+
+```text
+State 읽기
+→ 외부 서비스 또는 helper 호출
+→ 이벤트 기록
+→ partial State update 반환
+```
+
+판단 규칙은 같은 파일의 이름 있는 helper로 구분한다. 별도의 책임이 충분히 크거나 여러 곳에서 공유될 때만 독립 모듈로 둔다.
+
+### 2. 라우팅은 `routes.py`에 둔다
+
+Node 내부에서 다음 Node 이름을 결정하지 않는다. Graph 변경은 `graph.py`, 조건 변경은 `routes.py`에서 찾을 수 있어야 한다.
+
+### 3. 결정론적 검증과 LLM 검토를 섞지 않는다
+
+```text
+code validation
+→ execution
+→ result validation
+→ Critic
+→ commit boundary validation
+```
+
+Critic은 deterministic validation 실패를 승인으로 뒤집을 수 없다.
+
+### 4. State에는 큰 원문을 넣지 않는다
+
+Dataset, 생성 코드, 실행 결과, Figure, Report는 ArtifactStore에 저장하고 State에는 ArtifactRef를 둔다.
+
+### 5. 누적 지식과 현재 cycle 값을 구분한다
+
+- 현재 cycle: `intent`, `program_ref`, `candidate_ref`, `review`, validation fields
+- 누적: `evidence`, `evidence_relations`, `rejected`, `issues`
+
+새 Intent 시작 시 `cycle_reset_update()`의 대상인지 먼저 확인한다.
+
+### 6. Node 반환 타입을 명시한다
+
+가능하면 `node_updates.py`의 TypedDict를 사용한다. `dict[str, Any]`를 새 Node의 기본 반환 타입으로 추가하지 않는다.
+
+### 7. 기존 import 경로를 무심코 깨지 않는다
+
+현재 일부 테스트와 호출부는 `graph.route_after_*`, `program.validate_code`, `running.validate_result`, `progress._write_report` 같은 기존 경로를 사용한다. 파일 이동 시 re-export 또는 compatibility wrapper를 먼저 제공한다.
+
+## 코드 리뷰 체크리스트
+
+- 이 함수의 책임을 한 문장으로 설명할 수 있는가?
+- 함수가 `AnalysisGraphState`에서 읽는 key가 지나치게 많은가?
+- 순수 정책을 별도 함수/모듈로 테스트할 수 있는가?
+- LLM 응답을 코드 검증 없이 State에 확정하고 있지 않은가?
+- Artifact 원문을 State에 복사하고 있지 않은가?
+- 실패 시 다음 경로가 `routes.py`에서 명확하게 보이는가?
+- 새 update key가 `AnalysisGraphState`와 적절한 Node update 타입에 반영됐는가?
+- Resume/Checkpoint 경로에서도 같은 검증 경계가 유지되는가?
+
+## 실패와 관측 경계
+
+- Planner/Codegen/Critic의 연결·설정 장애는 `FAILED / SERVICE_UNAVAILABLE`로 종료한다.
+- Critic 응답 형식·계약 오류는 해당 시도만 거부한다. 재계획 및 기존 반복 상한을 유지한다.
+- 보고서 생성·의미 검토 실패는 검증되지 않은 Markdown을 채택하지 않고 JSON 요약으로 대체한다.
+- 종료된 State는 `assess_progress`에서 예산/회차 종료 코드로 덮어쓰지 않는다.
+- `planner_decision.py`는 `RuntimeDeps`를 받지 않는다. `PlannerDecision`의 update와 event 데이터를 반환하고, `planning.py`가 이벤트를 기록한다. 기존 private helper 호출 경로는 이 경계의 wrapper로 유지한다.
+
+## 타입 검증
+
+`mypy`는 `pyproject.toml`의 `files`에 열거한 orchestration 경계를 검사한다.
+노드 partial update와 종료/회차 초기화 update를 TypedDict로 명시하며, CI에서 반환 필드와 값 타입을 검사한다. 전체 저장소의 타입 검사가 완료됐다는 의미는 아니다.
+
+## 예산 연장과 재개
+
+`AnalysisService.resume()`의 예산 갱신은 마지막 완료 노드에서의 State update로 기록한다.
+`as_node=START`로 기록하면 실행 위치가 `profile_data`로 바뀌므로 사용하지 않는다.
+현재의 직렬 그래프에서는 마지막 완료 노드를 추론할 수 있다. 병렬 분기를 추가한다면 재개 위치 보존 정책도 함께 검토해야 한다.
+완료된 그래프는 예산을 늘려도 다시 시작하지 않는다.
+
+## 코드 탐색과 변경 규칙
+
+- 그래프는 `nodes`의 안정적인 이름을 사용하고, `nodes/__init__.py`는 실제 구현 모듈에서 직접 가져온다.
+- `program.validate_code`, `running.validate_result`, `progress.finalize` 및 보고서 private wrapper는 기존 호출부를 위한 호환 경로다. 새 내부 코드와 일반 테스트는 실제 구현을 사용한다.
+- 주요 Node를 파일 앞쪽에, 같은 기능의 helper를 뒤쪽에 둔다. 작은 정책마다 파일이나 입력 모델을 만들지 않는다.
+- Goal 판정은 `planner_decision.py`, 시도 거부는 `review.py`, 진행/종료는 `progress.py`에서 함께 읽는다.
+- 판정 조건과 카운터의 의미는 구현 가까이에 설명한다. `routes.py`의 정적/런타임 재시도 상한은 비교 연산자를 임의로 통일하지 않는다.
+- 보고서 테스트는 `reporting.write_report(..., timeout_seconds=...)`로 시간 제한을 전달한다.
+- 서비스 factory는 역할별 Protocol을 반환한다. 각 서비스 메서드는 `ServiceResult[T]`로 값·오류·실패 종류를 함께 반환한다. `last_error` 같은 호출 간 공유 속성을 사용하지 않는다.
+- Planner의 반환값은 `PlannerProposal.intent`와 `verdict`로 구분한다. 의도 검증 실패에도 목표 판정은 보존할 수 있다.
+- `plan_intent`는 판단 함수를 직접 호출하고 이벤트 기록과 State 조립을 본문에서 수행한다. 회차 초기화 후 목표·Intent·Agenda 변경을 명시적으로 반영한다.
+- `service_failure`는 종료에 필요한 서비스 실패 메타데이터이며 새 회차에서 초기화된다. Critic 장애 후 보고서는 이 State를 읽어 JSON으로 대체한다.
+- 사용자 정의 Planner/Codegen/Critic 구현도 `ServiceResult` 반환 계약을 따라야 한다. 이 호출 결과는 체크포인트의 분석 계약과 별개다.

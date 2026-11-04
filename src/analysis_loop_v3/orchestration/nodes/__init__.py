@@ -1,12 +1,21 @@
-"""State 업데이트만 반환하는 체크포인트 단위 그래프 노드. 분할 순서 = graph.py 흐름.
+"""LangGraph에서 실행되는 Node의 안정적인 import surface.
 
-    planning   무엇을 물을지    profile_data / decompose_objective / plan_intent
-    program    어떻게 계산할지  lookup_program / generate_code / validate_code
-    running    실제로 돌리기    execute / validate_result
-    review     의미 판정        critique / commit_evidence / reject_attempt
-    progress   계속/종료        assess_progress / expand_goals / finalize
+Node와 세부 정책을 분리한다.
 
-여기서 전부 re-export하므로 `nodes.execute` 같은 기존 호출부는 그대로 동작한다.
+    planning.py          Planner orchestration
+    program.py           코드 조회/생성
+    code_validation.py   코드 계약 검증
+    running.py           Sandbox 실행
+    result_validation.py 결과 계약 검증
+    review.py            Critic / Evidence commit orchestration
+    progress.py          진행/종료 orchestration
+    reporting.py         최종 보고서 pipeline
+
+세부 규칙은 planner_context / planner_decision / intent_policy /
+review_evidence / review_agenda에 둔다.
+
+그래프는 이 모듈에서 Node를 re-export하므로 `nodes.execute` 같은 기존 호출부를
+유지할 수 있다.
 """
 
 from ._shared import (
@@ -18,6 +27,7 @@ from ._shared import (
     bump_error_streak,
     is_stuck,
 )
+from .code_validation import validate_code
 from .evidence_lookup import lookup_evidence
 from .inspection import inspect_data
 from .planning import (
@@ -28,19 +38,19 @@ from .planning import (
     profile_data,
     reuse_evidence,
 )
-from .program import generate_code, lookup_program, validate_code
+from .program import generate_code, lookup_program
 from .progress import (
     MAX_GOAL_EXPANSIONS,
     MIN_SECONDS_FOR_EXPANSION,
     assess_progress,
     expand_goals,
-    finalize,
 )
+from .reporting import finalize
+from .result_validation import validate_result
 from .review import commit_evidence, critique, reject_attempt
-from .running import SANDBOX_TIMEOUT_SECONDS, execute, validate_result
+from .running import SANDBOX_TIMEOUT_SECONDS, execute
 
 __all__ = [
-    # 상수 — graph.py 라우팅과 테스트가 참조한다.
     "MAX_RUNTIME_REPAIRS",
     "MAX_STATIC_REPAIRS",
     "STUCK_THRESHOLD",
@@ -49,7 +59,6 @@ __all__ = [
     "SANDBOX_TIMEOUT_SECONDS",
     "MAX_GOAL_EXPANSIONS",
     "MIN_SECONDS_FOR_EXPANSION",
-    # 노드 — graph.py가 이 이름으로 등록한다.
     "profile_data",
     "decompose_objective",
     "plan_intent",
@@ -68,7 +77,6 @@ __all__ = [
     "assess_progress",
     "expand_goals",
     "finalize",
-    # 내부 헬퍼 — 테스트가 직접 검사한다.
     "_apply_goal_verdict",
     "_event",
     "_load_generated",

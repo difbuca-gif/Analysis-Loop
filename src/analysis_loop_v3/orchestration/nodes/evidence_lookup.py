@@ -13,13 +13,13 @@ from ...state import (
     get_evidence_relations,
     get_intent,
 )
+from ..node_updates import EvidenceLookupUpdate
 from ._shared import _event
 
 LOOKUP_LIMIT = 8
 
 
-
-async def lookup_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[str, Any]:
+async def lookup_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> EvidenceLookupUpdate:
     """goal/column/lineage 기준 active Evidence 조회.
 
     Claim 텍스트 유사도로 분석 정답을 판단하지 않는다. durable 구조 필드만 사용한다.
@@ -29,13 +29,11 @@ async def lookup_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[
 
     evidence = active_evidence(state)
     applicability = {
-        item.evidence_id: evidence_data_applicability(state, item)
-        for item in evidence
+        item.evidence_id: evidence_data_applicability(state, item) for item in evidence
     }
     # incompatible schema Evidence는 직접 비교 대상에서 제외
     evidence = [
-        item for item in evidence
-        if applicability[item.evidence_id] != "incompatible_schema"
+        item for item in evidence if applicability[item.evidence_id] != "incompatible_schema"
     ]
     requested_columns = set(intent.candidate_columns)
     parent_ids = set(intent.parent_evidence_ids)
@@ -70,7 +68,8 @@ async def lookup_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[
 
     digests = [
         FindingDigest.from_evidence(
-            item, data_applicability=applicability[item.evidence_id],
+            item,
+            data_applicability=applicability[item.evidence_id],
         ).model_dump(mode="json")
         for item in selected
     ]
@@ -81,12 +80,17 @@ async def lookup_evidence(state: AnalysisGraphState, deps: RuntimeDeps) -> dict[
         "parents": sorted(parent_ids),
         "selected_evidence_ids": [item.evidence_id for item in selected],
     }
-    _event(state, deps, "EVIDENCE_LOOKED_UP", {
-        "intent_id": intent.intent_id,
-        "selected_evidence_ids": history["selected_evidence_ids"],
-        "goal_id": intent.goal_id,
-        "columns": history["columns"],
-    })
+    _event(
+        state,
+        deps,
+        "EVIDENCE_LOOKED_UP",
+        {
+            "intent_id": intent.intent_id,
+            "selected_evidence_ids": history["selected_evidence_ids"],
+            "goal_id": intent.goal_id,
+            "columns": history["columns"],
+        },
+    )
     return {
         "evidence_lookup_summary": digests,
         "evidence_lookup_history": [history],

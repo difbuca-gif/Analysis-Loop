@@ -2,7 +2,7 @@
 
 HTTP 대신 `agy` CLI를 서브프로세스로 부른다(--print + --json-schema로 계약 강제).
 인스턴스에 last_error를 남기면 CODEGEN_CONCURRENCY 동시 호출에서 레이스가 나므로,
-실패는 반환값 None으로만 알린다.
+실패 정보는 호출별 ServiceResult로 반환한다.
 """
 
 from __future__ import annotations
@@ -17,11 +17,10 @@ from typing import Any
 from pydantic import ConfigDict, ValidationError
 
 from ..contracts import DatasetProfile, GeneratedAnalysis, ResearchIntent
+from ..runtime_protocols import ServiceResult
 from .services import _dumps, _profile_digest, load_prompt
 
-DEFAULT_AGY_EXECUTABLE = str(
-    Path.home() / "AppData" / "Local" / "agy" / "bin" / "agy.exe"
-)
+DEFAULT_AGY_EXECUTABLE = str(Path.home() / "AppData" / "Local" / "agy" / "bin" / "agy.exe")
 
 
 class _AgyGeneratedAnalysis(GeneratedAnalysis):
@@ -34,9 +33,7 @@ def _codegen_schema() -> dict[str, Any]:
     """intent_id를 제외한 GeneratedAnalysis JSON schema."""
     schema = GeneratedAnalysis.model_json_schema()
     schema.get("properties", {}).pop("intent_id", None)
-    schema["required"] = [
-        name for name in schema.get("required", []) if name != "intent_id"
-    ]
+    schema["required"] = [name for name in schema.get("required", []) if name != "intent_id"]
     return schema
 
 
@@ -58,7 +55,7 @@ class AgyCodegen:
         profile: DatasetProfile,
         previous_errors: list[str],
         timeout_seconds: float,
-    ) -> GeneratedAnalysis | None:
+    ) -> ServiceResult[GeneratedAnalysis]:
         payload: dict[str, Any] = {
             "연구 의도": intent.model_dump(mode="json", exclude={"intent_id"}),
             "데이터 컬럼": _profile_digest(profile),
@@ -74,39 +71,59 @@ class AgyCodegen:
             json.dump(_SCHEMA, schema_path, ensure_ascii=False)
             schema_path.close()
 
-            proc = await asyncio.create_subprocess_exec(
-                self.executable,
-                "--dangerously-skip-permissions",
-                "--output-format", "json",
-                "--json-schema", schema_path.name,
-                "--print", prompt,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    self.executable,
+                    "--dangerously-skip-permissions",
+                    "--output-format",
+                    "json",
+                    "--json-schema",
+                    schema_path.name,
+                    "--print",
+                    prompt,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as exc:
+                return ServiceResult(
+                    error=f"agy CLI 실행 실패: {exc}"[:400], failure_kind="configuration"
+                )
+
             try:
                 stdout, _stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout_seconds,
+                    proc.communicate(),
+                    timeout=timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
-                return None
+                return ServiceResult(error="agy CLI 시간 초과", failure_kind="response_invalid")
         finally:
             Path(schema_path.name).unlink(missing_ok=True)
 
         if proc.returncode != 0:
-            return None
+            return ServiceResult(
+                error=f"agy CLI 종료 코드: {proc.returncode}", failure_kind="response_invalid"
+            )
 
         try:
             raw = json.loads(stdout.decode("utf-8", "replace"))
         except json.JSONDecodeError:
-            return None
+            return ServiceResult(
+                error="agy CLI 실행 또는 출력 계약 위반", failure_kind="response_invalid"
+            )
         structured = raw.get("structured_output")
         if not isinstance(structured, dict):
-            return None
+            return ServiceResult(
+                error="agy CLI 실행 또는 출력 계약 위반", failure_kind="response_invalid"
+            )
         structured["intent_id"] = intent.intent_id
         try:
             boundary = _AgyGeneratedAnalysis.model_validate(structured)
-            return GeneratedAnalysis.model_validate(boundary.model_dump(mode="python"))
+            return ServiceResult(
+                value=GeneratedAnalysis.model_validate(boundary.model_dump(mode="python"))
+            )
         except ValidationError:
-            return None
+            return ServiceResult(
+                error="agy CLI 실행 또는 출력 계약 위반", failure_kind="response_invalid"
+            )
