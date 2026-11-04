@@ -6,7 +6,8 @@ suffix added during this execution, not the complete child checkpoint state.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from collections.abc import Awaitable, Callable
+from typing import Any, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -41,17 +42,19 @@ class ExecutionGraphOutput(TypedDict):
 
 
 def capture_execution_entry(state: ExecutionGraphState) -> dict[str, Any]:
-    return {"_entry_lengths": {key: len(state.get(key) or []) for key in _APPEND_FIELDS}}
+    values = cast(dict[str, Any], state)
+    return {"_entry_lengths": {key: len(values.get(key) or []) for key in _APPEND_FIELDS}}
 
 
 def export_execution_delta(state: ExecutionGraphState) -> ExecutionGraphOutput:
-    update = {key: state[key] for key in _RESULT_FIELDS if key in state}
+    values = cast(dict[str, Any], state)
+    update: dict[str, Any] = {key: values[key] for key in _RESULT_FIELDS if key in values}
     for key in _APPEND_FIELDS:
-        values = state.get(key) or []
+        appended_list = cast(list[dict[str, Any]], values.get(key) or [])
         entry_length = state["_entry_lengths"][key]
-        if len(values) < entry_length:
+        if len(appended_list) < entry_length:
             raise ValueError(f"append-only state decreased during execution: {key}")
-        appended = values[entry_length:]
+        appended = appended_list[entry_length:]
         if appended:
             update[key] = appended
     return {"execution_delta": update}
@@ -67,7 +70,7 @@ def _after_critique(state: ExecutionGraphState) -> str:
     return "export_execution_delta" if next_node == "finalize" else next_node
 
 
-def build_execution_subgraph(deps: RuntimeDeps):
+def build_execution_subgraph(deps: RuntimeDeps) -> Any:
     """Reuse the existing static/runtime repair limits and Critic routing."""
     builder = StateGraph(
         ExecutionGraphState,
@@ -75,9 +78,11 @@ def build_execution_subgraph(deps: RuntimeDeps):
         output_schema=ExecutionGraphOutput,
     )
 
-    def bind(fn):
+    def bind(
+        fn: Callable[..., Awaitable[Any]],
+    ) -> Callable[[ExecutionGraphState], Awaitable[dict[str, Any]]]:
         async def node(state: ExecutionGraphState) -> dict[str, Any]:
-            return await fn(state, deps)
+            return cast(dict[str, Any], await fn(state, deps))
 
         node.__name__ = fn.__name__
         return node
