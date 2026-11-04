@@ -98,7 +98,8 @@ def build_execution_subgraph(deps: RuntimeDeps) -> Any:
         nodes.commit_evidence,
         nodes.reject_attempt,
     ):
-        builder.add_node(fn.__name__, bind(fn))
+        # LangGraph's overloaded node protocol rejects this valid async wrapper in mypy.
+        builder.add_node(fn.__name__, cast(Any, bind(fn)))
     builder.add_node("export_execution_delta", export_execution_delta)
     builder.add_edge(START, "capture_execution_entry")
     builder.add_edge("capture_execution_entry", "lookup_program")
