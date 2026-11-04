@@ -108,7 +108,7 @@ def test_resume_with_budget_runs_only_remaining_nodes(harness, monkeypatch, back
     state.update(
         schema_version=SCHEMA_VERSION, status="RUNNING", iteration=3, deadline_at=time.time() + 60
     )
-    # The first remaining step is critique; its outage should end the graph.
+    # The first remaining step is the execution subgraph; a Critic outage ends the graph.
     deps.critic.review = AsyncMock(
         return_value=ServiceResult(error="offline", failure_kind="provider_unavailable")
     )
@@ -120,7 +120,10 @@ def test_resume_with_budget_runs_only_remaining_nodes(harness, monkeypatch, back
         before = list(completed)
         deps.events.clear()
         handle = await service.resume(thread_id=state["run_id"], time_budget_seconds=300)
-        assert completed == before
+        assert completed[:len(before)] == before
+        assert completed[len(before):] == [
+            "lookup_program", "validate_code", "execute", "validate_result",
+        ]
         assert handle.status == "FAILED"
         assert handle.state["stop_reason"] == "critic 실패: offline"
         assert handle.state["iteration"] == 3
