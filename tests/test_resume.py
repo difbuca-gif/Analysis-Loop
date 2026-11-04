@@ -46,7 +46,7 @@ def _service_with_completed_prefix(state, deps, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "last_node,expected_next",
+    "expected_next",
     ["decompose_objective", "plan_intent", "execution", "assess_progress", "finalize", None],
 )
 def test_budget_extension_preserves_checkpoint_position(
