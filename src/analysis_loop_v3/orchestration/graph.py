@@ -61,7 +61,8 @@ def build_graph(deps: RuntimeDeps, *, checkpointer: Any | None = None) -> Any:
         nodes.expand_goals,
         nodes.finalize,
     ):
-        builder.add_node(fn.__name__, bind(fn))
+        # LangGraph's overloaded node protocol rejects this valid async wrapper in mypy.
+        builder.add_node(fn.__name__, cast(Any, bind(fn)))
 
     builder.add_node("execution", build_execution_subgraph(deps))
     builder.add_node("apply_execution_delta", apply_execution_delta)
