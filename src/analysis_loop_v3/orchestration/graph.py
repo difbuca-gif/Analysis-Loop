@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -35,13 +36,15 @@ def apply_execution_delta(state: AnalysisGraphState) -> dict[str, Any]:
     return {**(state.get("execution_delta") or {}), "execution_delta": None}
 
 
-def build_graph(deps: RuntimeDeps, *, checkpointer: Any | None = None):
+def build_graph(deps: RuntimeDeps, *, checkpointer: Any | None = None) -> Any:
     """부모 그래프를 구성하고 자식에게 checkpoint 저장소를 상속한다."""
     builder = StateGraph(AnalysisGraphState)
 
-    def bind(fn):
+    def bind(
+        fn: Callable[..., Awaitable[Any]],
+    ) -> Callable[[AnalysisGraphState], Awaitable[dict[str, Any]]]:
         async def node(state: AnalysisGraphState) -> dict[str, Any]:
-            return await fn(state, deps)
+            return cast(dict[str, Any], await fn(state, deps))
 
         node.__name__ = fn.__name__
         return node
