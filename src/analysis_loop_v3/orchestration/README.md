@@ -15,33 +15,37 @@
 과거 Evidence와 Artifact를 삭제하지 않는다.
 
 ```text
-START
-  ↓
-profile_data
-  ↓
-decompose_objective
-  ↓
-plan_intent
-  ↓
-lookup/reuse/inspect/compute
-  ↓
-generate_code
-  ↓
-validate_code
-  ↓
-execute
-  ↓
-validate_result
-  ↓
-critique
-  ↓
-commit_evidence / reject_attempt
-  ↓
-assess_progress
-  ↓
-plan_intent / expand_goals / finalize
-  ↓
-END
+Main Graph
+  START → profile_data → decompose_objective → plan_intent
+                                        │
+                     ┌──────────────────┴─────────────────┐
+                     │                                    │
+       reuse / inspect / lookup             execution (Subgraph)
+                     │                                    │
+                     │                          lookup_program
+                     │                               ↓
+                     │                          generate_code
+                     │                               ↓
+                     │                          validate_code
+                     │                               ↓
+                     │                             execute
+                     │                               ↓
+                     │                         validate_result
+                     │                               ↓
+                     │                             critique
+                     │                               ↓
+                     │                      commit / reject attempt
+                     │                               ↓
+                     │                       export_execution_delta
+                     │                               ↓
+                     │                       apply_execution_delta
+                     └──────────────────┬─────────────────┘
+                                        ↓
+                                  assess_progress
+                                        ↓
+                         plan_intent / expand_goals / finalize
+                                        ↓
+                                       END
 ```
 
 ## 파일 책임
