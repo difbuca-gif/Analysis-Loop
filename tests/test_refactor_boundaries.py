@@ -126,16 +126,28 @@ def test_report_failure_policy_does_not_stop_completed_analysis():
     assert service_failure_action("configuration", stage="report") == "fallback_report"
 
 
-def test_checkpoint_resume_critic_outage_reaches_graph_end(harness):
+def test_checkpoint_resume_critic_outage_reaches_graph_end(harness, monkeypatch):
     state, deps = harness
     deps.critic.review = AsyncMock(
         return_value=ServiceResult(error="offline", failure_kind="provider_unavailable")
     )
+    from analysis_loop_v3.orchestration import nodes
+
+    def stub(name):
+        async def node(state, deps):
+            return {}
+
+        node.__name__ = name
+        return node
+
+    for name in ("lookup_program", "validate_code", "execute", "validate_result"):
+        monkeypatch.setattr(nodes, name, stub(name))
+
     graph = build_graph(deps, checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "critic-outage"}}
 
     async def resume():
-        await graph.aupdate_state(config, state, as_node="validate_result")
+        await graph.aupdate_state(config, state, as_node="plan_intent")
         result = await graph.ainvoke(None, config)
         snapshot = await graph.aget_state(config)
         assert snapshot.next == ()

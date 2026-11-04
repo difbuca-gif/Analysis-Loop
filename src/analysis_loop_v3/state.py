@@ -82,6 +82,9 @@ class AnalysisGraphState(TypedDict, total=False):
     issues: Annotated[list[dict[str, Any]], _append]
     coverage: dict[str, Any]  # AnalysisCoverage
 
+    # 실행 서브그래프에서 반환하는 해당 회차 변경분.
+    execution_delta: dict[str, Any] | None
+
     # --- 진행 제어 ---
     iteration: int
     max_iterations: int
@@ -148,6 +151,7 @@ def new_state(
         rejected=[],
         issues=[],
         coverage=AnalysisCoverage().model_dump(mode="json"),
+        execution_delta=None,
         iteration=0,
         max_iterations=max_iterations,
         status=RunStatus.RUNNING.value,

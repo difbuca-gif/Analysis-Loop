@@ -102,6 +102,8 @@ files = [
     "src/analysis_loop_v3/orchestration/node_updates.py",
     "src/analysis_loop_v3/orchestration/failure_policy.py",
     "src/analysis_loop_v3/orchestration/routes.py",
+    "src/analysis_loop_v3/orchestration/graph.py",
+    "src/analysis_loop_v3/orchestration/execution_graph.py",
     "src/analysis_loop_v3/orchestration/nodes/planning.py",
     "src/analysis_loop_v3/orchestration/nodes/planner_decision.py",
     "src/analysis_loop_v3/orchestration/nodes/progress.py",

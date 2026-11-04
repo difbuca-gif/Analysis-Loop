@@ -47,15 +47,10 @@ def _service_with_completed_prefix(state, deps, monkeypatch):
 
 @pytest.mark.parametrize(
     "last_node,expected_next",
-    [
-        ("validate_code", "execute"),
-        ("execute", "validate_result"),
-        ("validate_result", "critique"),
-        ("finalize", None),
-    ],
+    ["decompose_objective", "plan_intent", "execution", "assess_progress", "finalize", None],
 )
 def test_budget_extension_preserves_checkpoint_position(
-    harness, monkeypatch, last_node, expected_next
+    harness, monkeypatch, expected_next
 ):
     state, deps = harness
     state.update(
@@ -94,7 +89,7 @@ def test_invalid_budget_does_not_change_checkpoint(harness, budget):
     service._drive = AsyncMock()
 
     async def check():
-        await service.graph.aupdate_state(config, state, as_node="validate_result")
+        await service.graph.aupdate_state(config, state, as_node="plan_intent")
         before = await service.graph.aget_state(config)
         with pytest.raises(ValueError, match="0보다 커야"):
             await service.resume(thread_id=state["run_id"], time_budget_seconds=budget)
@@ -121,7 +116,7 @@ def test_resume_with_budget_runs_only_remaining_nodes(harness, monkeypatch, back
     config = {"configurable": {"thread_id": state["run_id"]}}
 
     async def check():
-        await service.graph.ainvoke(state, config, interrupt_before=["critique"])
+        await service.graph.ainvoke(state, config, interrupt_before=["execution"])
         before = list(completed)
         deps.events.clear()
         handle = await service.resume(thread_id=state["run_id"], time_budget_seconds=300)

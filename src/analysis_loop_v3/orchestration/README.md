@@ -4,6 +4,16 @@
 
 ## 실행 흐름
 
+메인 그래프는 계획·비코드 작업·목표 진행·종료를 담당한다. 코드 계산 경로는
+`execution` 서브그래프에서 `lookup_program → generate_code → validate_code
+→ execute → validate_result → critique → commit_evidence/reject_attempt`로 진행한다.
+정적/런타임 실패 시 기존 재시도 정책을 유지한다. 서브그래프의 Evidence 누적
+변경분만 `apply_execution_delta`에서 부모 State에 반영한다.
+
+**주의:** 이전 구조에서 실행 도중 저장된 체크포인트의 노드 경로가 달라진다.
+배포 전에 기존 실행을 완료하거나 별도 재개 마이그레이션을 검증해야 한다.
+과거 Evidence와 Artifact를 삭제하지 않는다.
+
 ```text
 START
   ↓
@@ -40,7 +50,8 @@ END
 
 | 파일 | 책임 |
 |---|---|
-| `graph.py` | Node 등록과 Edge 연결만 담당 |
+| `graph.py` | Main Graph와 실행 서브그래프 연결 |
+| `execution_graph.py` | 실행·검증·Evidence 채택과 상태 변경분 전달 |
 | `routes.py` | State를 읽고 다음 Node를 선택하는 라우팅 정책 |
 | `node_updates.py` | Node별 partial State update 타입 |
 | `failure_policy.py` | 외부 서비스 실패의 종료·시도 거부·보고서 대체 정책 |
